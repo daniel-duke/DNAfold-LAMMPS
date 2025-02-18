@@ -2,7 +2,7 @@ import numpy as np
 
 class parameters:
 	def __init__( self, debug, nstep, dump_every, react_every, dt, dbox, verlet_skin, neigh_every, bond_res,
-				  nstep_scaf, force_bind, dehyb_bond, dehyb_angle, nnt_per_bead, circular_scaf, staple_copies,
+				  nstep_scaf, force_bind, dehyb, nnt_per_bead, circular_scaf, staple_copies,
 				  kB, T, r_h_bead, visc, sigma, epsilon, r12_eq, k_x, r12_cut_hyb, U_hyb, dsLp):
 		self.debug = debug
 		self.nstep = nstep
@@ -14,8 +14,7 @@ class parameters:
 		self.neigh_every = neigh_every
 		self.bond_res = bond_res
 		self.nstep_scaf = nstep_scaf
-		self.dehyb_bond = dehyb_bond
-		self.dehyb_angle = dehyb_angle
+		self.dehyb = dehyb
 		self.nnt_per_bead = nnt_per_bead
 		self.circular_scaf = circular_scaf
 		self.staple_copies = staple_copies
@@ -42,7 +41,7 @@ class parameters:
 	def record(self, paramsFile):
 		with open(paramsFile,'w') as f:
 			f.write(f"debug           {self.debug}\n")
-			f.write(f"nstep           {self.nstep}\n")
+			f.write(f"nstep           {self.nstep:0.0f}\n")
 			f.write(f"react_every     {self.react_every:0.0f}\n")
 			f.write(f"dt              {self.dt}\n")
 			f.write(f"dbox            {self.dbox:0.2f}\n")
@@ -51,8 +50,7 @@ class parameters:
 			f.write(f"bond_res        {self.bond_res}\n")
 			f.write(f"nstep_scaf      {self.nstep_scaf:0.0f}\n")
 			f.write(f"force_bind      {self.force_bind}\n")
-			f.write(f"dehyb_bond      {self.dehyb_bond}\n")
-			f.write(f"dehyb_angle     {self.dehyb_angle}\n")
+			f.write(f"dehyb           {self.dehyb}\n")
 			f.write(f"nnt_per_bead    {self.nnt_per_bead:0.0f}\n")
 			f.write(f"circular_scaf   {self.circular_scaf}\n")
 			f.write(f"staple_copies   {self.staple_copies}\n")

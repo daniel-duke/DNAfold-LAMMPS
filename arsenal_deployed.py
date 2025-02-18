@@ -6,13 +6,13 @@ import os
 import sys
 
 ### write lammps-style geometry
-def write_geo(geoFile,dbox3,points,molecules="auto",types="auto",bonds="none",angles="none",natomType="auto",nbondType="auto",nangleType="auto",masses="auto",charges="none"):
+def writeGeo(geoFile,dbox3,points,molecules="auto",types="auto",bonds="none",angles="none",natomType="auto",nbondType="auto",nangleType="auto",masses="auto",charges="none"):
 
 	### notes
 	# by convention, molecule/type/bond/angle indexing starts at 1, however, there is
 	  # nothing in this function that requires this to be the case (it will print the
 	  # values it is given).
-	# assumes 4 decimal charge precision is sufficient.
+	# assumes 4 decimal charge precision is sufficient. haha
 
 	### count atoms
 	natom = len(points)
@@ -24,7 +24,7 @@ def write_geo(geoFile,dbox3,points,molecules="auto",types="auto",bonds="none",an
 		print("Flag: Not writing geometry file - dbox3 must be number or 3-element list.")
 		return
 	if isinstance(molecules,str) and molecules == "auto":
-		molecules = np.ones(natom,dtype=int)
+		molecules = np.zeros(natom,dtype=int)
 	if isinstance(types,str) and types == "auto":
 		types = np.ones(natom,dtype=int)
 	if isinstance(bonds,str) and bonds == "none":
@@ -139,7 +139,7 @@ def write_geo(geoFile,dbox3,points,molecules="auto",types="auto",bonds="none",an
 
 
 ### check for overlap between a bead and a list of beads
-def check_overlap(r0,r_other,sigma,dbox):
+def checkOverlap(r0,r_other,sigma,dbox):
 	for bi in range(len(r_other)):
 		if np.linalg.norm(ars.applyPBC(r0-r_other[bi],dbox)) < sigma:
 			return True
@@ -147,7 +147,7 @@ def check_overlap(r0,r_other,sigma,dbox):
 
 
 ### return unit vector
-def unit_vector(vector):
+def unitVector(vector):
 	return vector / np.linalg.norm(vector)
 
 
@@ -157,7 +157,7 @@ def applyPBC(r,dbox):
 
 
 ### vector with random orientation and (on average) unit magnitude
-def box_muller():
+def boxMuller():
 	x = np.zeros(3)
 	x[0] = np.sqrt(-2 * np.log(random.uniform(0,1))) * np.cos(2 * np.pi * random.uniform(0,1))
 	x[1] = np.sqrt(-2 * np.log(random.uniform(0,1))) * np.cos(2 * np.pi * random.uniform(0,1))
@@ -166,7 +166,7 @@ def box_muller():
 
 
 ### vector randomly placed within box
-def rand_pos(dbox):
+def randPos(dbox):
 	x = np.zeros(3)
 	x[0] = random.uniform(-dbox/2,dbox/2)
 	x[1] = random.uniform(-dbox/2,dbox/2)
