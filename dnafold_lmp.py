@@ -17,7 +17,8 @@ import os
 
 # To Do
 # add blocking cases for angle template that arise from using multiple staple copies,
-  # input file, set unique charge for staples with no complements
+  # input file, set unique charge for staples with no complements, use comm modify
+  # to enable multiple processors?
 
 
 ################################################################################
@@ -37,78 +38,63 @@ def main():
 	inCadFile = inSrcFold + simID + ".json"
 	outSimFold = outSrcFold + simID + simTag + "/"
 	outCadFile = outSimFold + simID + ".json"
-	outGeoFile = outSimFold + "geometry.in"
-	outGeoVisFile = outSimFold + "geometry_vis.in"
-	outParamsFile = outSimFold + "parameters.txt"
-	outLammpsFile = outSimFold + "lammps.in"
-	outReactFold = outSimFold + "react/"
-	bondName_hyb = "hyb"
-	debug = True
-
-	### prepare folder
-	ars.createSafeFold(outSimFold)
-	ars.createEmptyFold(outReactFold)
 
 	### computational parameters
-	nstep			= 4E6		#steps		- number of simulation steps
-	dump_every		= 1E3		#steps		- number of steps between positions dumps
-	react_every		= 1E3		#steps		- number of steps between reactions
-	dt				= 0.01		#ns			- time step
-	dbox			= 40		#nm			- periodic boundary diameter
-	verlet_skin		= 4			#nm			- width of neighbor list skin (= r12_cut - sigma)
-	neigh_every		= 10		#steps		- how often to consider updating neighbor list
-	bond_res 		= 0.1		#nm			- distance between tabular bond interpolation points
-	nstep_scaf		= 1E4		#steps		- number of steps for scaffold relaxation
-	force_bind		= False		#bool		- whether to force hybridization (not applied if >1 staple copies)
-	dehyb			= False		#bool		- whether to include dehybridization reactions (unnecessary for 1 staple copy)
+	nstep			= 1E6		# steps			- number of simulation steps
+	nstep_scaf		= 1E4		# steps			- number of steps for scaffold relaxation
+	dump_every		= 1E3		# steps			- number of steps between positions dumps
+	dt				= 0.01		# ns			- integration time step
+	dbox			= 40		# nm			- periodic boundary diameter
+	force_bind		= False		# bool			- whether to force hybridization (not applied if >1 staple copies)
+	dehyb			= False		# bool			- whether to include dehybridization reactions (unnecessary for 1 staple copy)
+	debug			= False		# bool			- whether to include debugging output
 
 	### design parameters
-	nnt_per_bead	= 8			#nt			- nucleotides per bead (only 8)
-	circular_scaf	= True		#bool		- whether the scaffold is circular
-	staple_copies	= 1			#int		- number of copies for each staple
+	nnt_per_bead	= 8			# nt			- nucleotides per bead (only 8)
+	circular_scaf	= True		# bool			- whether the scaffold is circular
+	staple_copies	= 1			# int			- number of copies for each staple
 
 	### physical parameters
-	kB				= 0.0138	#pN*nm/K	- Boltzmann constant
-	T				= 300		#K			- temperature
-	r_h_bead		= 1.28		#nm			- hydrodynamic radius of single bead
-	visc			= 0.8472	#mPa/s		- viscosity (pN*ns/mn^2)
+	T				= 300		# K				- temperature
+	r_h_bead		= 1.28		# nm			- hydrodynamic radius of single bead
+	visc			= 0.8472	# mPa/s			- viscosity (units equivalent to pN*ns/mn^2)
 
 	### interaction parameters
-	sigma			= 2.14		#nm			- bead van der Walls radius
-	epsilon			= 6.96		#pN*nm		- WCA energy parameter
-	r12_eq			= 2.72		#nm			- equilibrium bead separation
-	k_x				= 152		#pN/nm		- backbone spring constant
-	r12_cut_hyb		= 2.0		#nm			- hybridization potential cutoff radius
-	U_hyb			= 10 		#kcal/mol	- depth of hybridization potential
-	dsLp			= 50		#nm			- persistence length of dsDNA
+	sigma			= 2.14		# nm			- bead van der Walls radius
+	epsilon			= 4			# kcal/mol		- WCA energy parameter
+	r12_eq			= 2.72		# nm			- equilibrium bead separation
+	k_x				= 80		# kcal/mol/nm2	- backbone spring constant
+	r12_cut_hyb		= 2			# nm			- hybridization potential cutoff radius
+	U_hyb			= 10		# kcal/mol		- depth of hybridization potential
+	dsLp			= 50		# nm			- persistence length of dsDNA
 
 	### create parameters class
-	p = parameters.parameters( 	debug, nstep, dump_every, react_every, dt, dbox, verlet_skin, neigh_every, bond_res,
-								nstep_scaf, force_bind, dehyb, nnt_per_bead, circular_scaf, staple_copies,
-								kB, T, r_h_bead, visc, sigma, epsilon, r12_eq, k_x, r12_cut_hyb, U_hyb, dsLp)
+	p = parameters.parameters(	nstep, nstep_scaf, dump_every, dt, dbox, force_bind, dehyb, debug,
+								nnt_per_bead, circular_scaf, staple_copies, T, r_h_bead, visc, 
+								sigma, epsilon, r12_eq, k_x, r12_cut_hyb, U_hyb, dsLp)
 	
+	### prepare output folder
+	ars.createSafeFold(outSimFold)
+
 	### record metadata
-	p.record(outParamsFile)
+	p.record(outSimFold + "parameters.txt")
 	os.system(f"cp \"{inCadFile}\" \"{outCadFile}\"")
 
 	### parse cadnano
 	strands, backbone_bonds, comp_hyb_bonds, is_crossover, p = buildDNAfoldModel(inCadFile, p)
 
 	### write simulation and visualization geometry files
-	r, nhyb, nangle = composeGeo(outGeoFile, strands, backbone_bonds, comp_hyb_bonds, is_crossover, p)
-	composeGeoVis(outGeoVisFile, strands, backbone_bonds, r, p)
+	r, nhyb, nangle = composeGeo(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_crossover, p)
+	composeGeoVis(outSimFold, strands, backbone_bonds, r, p)
 
 	### write bond react files
-	nreact_bond = writeReactBond(outReactFold, backbone_bonds, comp_hyb_bonds, is_crossover, p)
+	nreact_bond = writeReactBond(outSimFold, backbone_bonds, comp_hyb_bonds, is_crossover, p)
 
 	### write angle react files
-	nreact_angle_hyb, nreact_angle_dehyb = writeReactAngle(outReactFold, strands, backbone_bonds, comp_hyb_bonds, is_crossover, p)
-
-	### write table for hybridization bond
-	writeBondHyb(outSimFold, bondName_hyb, p)
+	nreact_angle_hyb, nreact_angle_dehyb = writeReactAngle(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_crossover, p)
 
 	### write lammps input file
-	writeInput(outLammpsFile, bondName_hyb, is_crossover, nhyb, nangle, nreact_bond, nreact_angle_hyb, nreact_angle_dehyb, p)
+	writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle_hyb, nreact_angle_dehyb, p)
 
 
 ################################################################################
@@ -207,7 +193,7 @@ def parseJson(inFile):
 
 
 ### write lammps geometry file, for simulation
-def composeGeo(outGeoFile, strands, backbone_bonds, comp_hyb_bonds, is_crossover, p):
+def composeGeo(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_crossover, p):
 	print("Writing simulation geometry file...")
 
 	### initailize positions
@@ -304,6 +290,7 @@ def composeGeo(outGeoFile, strands, backbone_bonds, comp_hyb_bonds, is_crossover
 				nangle += 1
 
 	### write file
+	outGeoFile = outSimFold + "geometry.in"
 	ars.writeGeo(outGeoFile, p.dbox, r, molecules, types, bonds, nangleType=2, charges=charges)
 
 	### return positions (without dummy atoms)
@@ -312,7 +299,7 @@ def composeGeo(outGeoFile, strands, backbone_bonds, comp_hyb_bonds, is_crossover
 
 
 ### write lammps geometry file, for visualization
-def composeGeoVis(outGeoFile, strands, backbone_bonds, r, p):
+def composeGeoVis(outSimFold, strands, backbone_bonds, r, p):
 
 	### count atoms
 	natom = r.shape[0]
@@ -343,28 +330,37 @@ def composeGeoVis(outGeoFile, strands, backbone_bonds, r, p):
 				bonds = np.append(bonds,[[type,atom1,atom2]],axis=0)
 
 	### write file
+	outGeoFile = outSimFold + "geometry_vis.in"
 	ars.writeGeo(outGeoFile, p.dbox, r, molecules, types, bonds)
 
 
 ### write lammps input file for lammps
-def writeInput(outLammpsFile, bondName_hyb, is_crossover, nhyb, nangle, nreact_bond, nreact_angle_hyb, nreact_angle_dehyb,  p):
+def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle_hyb, nreact_angle_dehyb,  p):
 	print("Writing input file...")
+
+	### computational parameters
+	verlet_skin			= 4		# nm		- width of neighbor list skin (= r12_cut - sigma)
+	neigh_every			= 10	# steps		- how often to consider updating neighbor list
+	bond_res 			= 0.1	# nm		- distance between tabular bond interpolation points
+	react_every_bond	= 1E1	# steps		- how often to check for new hybridization bonds
+	r12_cut_react_bond	= 4		# nm		- cutoff radius for potential hybridization bonds
+	react_every_angle	= 1E4	# steps		- how often to check for new hybridization angles
 
 	### bond file calculations
 	r12_cut_bond = np.sqrt(3)*p.dbox
-	r12_cut_bond = r12_cut_bond - r12_cut_bond%p.bond_res + p.bond_res
-	npoint_bond = int(r12_cut_bond/p.bond_res+1)
+	r12_cut_bond = r12_cut_bond - r12_cut_bond%bond_res + bond_res
+	npoint_bond = int(r12_cut_bond/bond_res+1)
 
 	### count digits
 	len_nreact_bond = len(str(nreact_bond))
 	len_nreact_angle_hyb = len(str(nreact_angle_hyb))
 	len_nreact_angle_dehyb = len(str(nreact_angle_dehyb))
 
-	### hybridization bond reaction parameters
-	react_every_bond = 10
-	r12_cut_react_bond = 4
+	### write table for hybridization bond
+	writeBondHyb(outSimFold, bond_res, p)
 
 	### open file
+	outLammpsFile = outSimFold + "lammps.in"
 	with open(outLammpsFile, 'w') as f:
 
 		### header
@@ -372,13 +368,17 @@ def writeInput(outLammpsFile, bondName_hyb, is_crossover, nhyb, nangle, nreact_b
 			"\n#------ Begin Input ------#\n"
 			"# Written by dnafold_lmp.py\n\n")
 
-		### basic setup
+		### initialize environment
 		f.write(
-			"## Initialization\n"
+			"## Environment Initialization\n"
 			"units           nano\n"
 			"dimension       3\n"
 			"boundary        p p p\n"
-			"atom_style      full\n"
+			"atom_style      full\n\n")
+
+		### read geometry data
+		f.write(
+			"## Reading Geometry Data\n"
 			"read_data       geometry.in &\n"
 			"                extra/bond/per/atom 100 &\n"
 			"                extra/angle/per/atom 100 &\n"
@@ -386,9 +386,9 @@ def writeInput(outLammpsFile, bondName_hyb, is_crossover, nhyb, nangle, nreact_b
 
 		### neighbor list
 		f.write(
-			"## System Definition\n"
-		   f"neighbor        {p.verlet_skin} bin\n"
-		   f"neigh_modify    every {int(p.neigh_every)}\n")
+			"## Parameters Definitions\n"
+		   f"neighbor        {verlet_skin} bin\n"
+		   f"neigh_modify    every {int(neigh_every)}\n")
 
 		### pairwise interactions
 		f.write(
@@ -402,7 +402,7 @@ def writeInput(outLammpsFile, bondName_hyb, is_crossover, nhyb, nangle, nreact_b
 		f.write(
 		   f"bond_style      hybrid zero harmonic table linear {npoint_bond}\n"
 		   f"bond_coeff      1 harmonic {p.k_x} {p.r12_eq}\n"
-		   f"bond_coeff      2 table bond_{bondName_hyb}.txt {bondName_hyb}\n"
+		   f"bond_coeff      2 table bond_hyb.txt hyb\n"
 		    "bond_coeff      3 zero\n")
 
 		### angled interactions
@@ -475,7 +475,7 @@ def writeInput(outLammpsFile, bondName_hyb, is_crossover, nhyb, nangle, nreact_b
 			for ri in range(nreact_angle_hyb):
 				for i in range(react_copies):
 					f.write(
-			   f" &\n                react angleHyb{ri*2+i+1:0>{len_nreact_angle_hyb}} all {int(p.react_every)} 0.0 {p.r12_cut_hyb:.1f} angleHyb{ri+1:0>{len_nreact_angle_hyb}}_mol_pre angleHyb{ri+1:0>{len_nreact_angle_hyb}}_mol_pst react/angleHyb{ri+1:0>{len_nreact_angle_hyb}}_map.txt custom_charges 4")
+			   f" &\n                react angleHyb{ri*2+i+1:0>{len_nreact_angle_hyb}} all {int(react_every_angle)} 0.0 {p.r12_cut_hyb:.1f} angleHyb{ri+1:0>{len_nreact_angle_hyb}}_mol_pre angleHyb{ri+1:0>{len_nreact_angle_hyb}}_mol_pst react/angleHyb{ri+1:0>{len_nreact_angle_hyb}}_map.txt custom_charges 4")
 
 			### angle dehybridization reactions
 			for ri in range(nreact_angle_dehyb):
@@ -489,7 +489,7 @@ def writeInput(outLammpsFile, bondName_hyb, is_crossover, nhyb, nangle, nreact_b
 		   f"fix             tstat1 real langevin {p.T} {p.T} {round(1/p.gamma_t,4)} 37\n"
 			"fix             tstat2 real nve\n"
 		   f"dump            dump1 real custom {int(p.dump_every)} trajectory.dat id mol xs ys zs\n"
-			"dump_modify     dump1 sort id\n"
+			"dump_modify     dump1 sort id append yes\n"
 		   f"timestep        {p.dt}\n\n")
 
 		### binding updates
@@ -514,21 +514,25 @@ def writeInput(outLammpsFile, bondName_hyb, is_crossover, nhyb, nangle, nreact_b
 				"compute         compD1a all bond/local dist engpot\n"
 				"compute         compD1b all property/local btype batom1 batom2\n"
 			   f"dump            dumpD1 all local {int(p.dump_every)} dump_bonds.dat index c_compD1a[1] c_compD1a[2] c_compD1b[1] c_compD1b[2] c_compD1b[3] \n"
+				"dump_modify     dumpD1 append yes\n"
 				"compute         compD2a all angle/local theta eng\n"
 				"compute         compD2b all property/local atype aatom1 aatom2 aatom3\n"
 			   f"dump            dumpD2 all local {int(p.dump_every)} dump_angles.dat index c_compD2a[1] c_compD2a[2] c_compD2b[1] c_compD2b[2] c_compD2b[3] c_compD2b[4]\n"
+				"dump_modify     dumpD2 append yes\n"
 			   f"dump            dumpD3 all custom {int(p.dump_every)} dump_charges.dat id q\n"
-				"dump_modify     dumpD3 sort id\n")
+				"dump_modify     dumpD3 sort id append yes\n")
 			f.write("\n")
 
 		### run
 		f.write(
 			"## Go Time\n"
-		   f"run             {int(p.nstep)}\n\n")
+		   f"run             {int(p.nstep)}\n"
+			"write_data      restart_geometry.out\n"
+			"write_restart   restart_binary.out\n\n")
 
 
 ### write reaction files for hybridization angles
-def writeReactBond(outReactFold, backbone_bonds, comp_hyb_bonds, is_crossover, p):
+def writeReactBond(outSimFold, backbone_bonds, comp_hyb_bonds, is_crossover, p):
 	print("Writing bond react files...")
 
 	### no reactions necessary for forced binding
@@ -760,6 +764,7 @@ def writeReactBond(outReactFold, backbone_bonds, comp_hyb_bonds, is_crossover, p
 
 	nreact = len(atoms_all)
 	len_nreact = len(str(nreact))
+	outReactFold = outSimFold + "react/"
 
 	for ri in range(nreact):
 
@@ -767,14 +772,14 @@ def writeReactBond(outReactFold, backbone_bonds, comp_hyb_bonds, is_crossover, p
 		nbond = len(bonds_all[ri])
 		nedge = len(edges_all[ri])
 
-		# if p.debug:
-		# 	if ri == 0:
-		# 		print("")
-		# 	print(f"Bond template {ri+1} (hybridization):")
-		# 	print(atoms_all[ri])
-		# 	print(bonds_all[ri])
-		# 	print(edges_all[ri])
-		# 	print("")
+		if p.debug:
+			if ri == 0:
+				print("")
+			print(f"Bond template {ri+1} (hybridization):")
+			print(atoms_all[ri])
+			print(bonds_all[ri])
+			print(edges_all[ri])
+			print("")
 
 		molPreFile = f"{outReactFold}bondHyb{ri+1:0>{len_nreact}}_mol_pre.txt"
 		with open(molPreFile,'w') as f:
@@ -851,7 +856,7 @@ def writeReactBond(outReactFold, backbone_bonds, comp_hyb_bonds, is_crossover, p
 
 
 ### write reaction files for hybridization angles
-def writeReactAngle(outReactFold, strands, backbone_bonds, comp_hyb_bonds, is_crossover, p):
+def writeReactAngle(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_crossover, p):
 	print("Writing angle react files...")
 
 	### initialize hyb
@@ -1179,6 +1184,7 @@ def writeReactAngle(outReactFold, strands, backbone_bonds, comp_hyb_bonds, is_cr
 	nreact_dehyb = len(atoms_all_dehyb)
 	len_nreact_hyb = len(str(nreact_hyb))
 	len_nreact_dehyb = len(str(nreact_dehyb))
+	outReactFold = outSimFold + "react/"
 
 	for ri in range(nreact_hyb):
 
@@ -1187,15 +1193,15 @@ def writeReactAngle(outReactFold, strands, backbone_bonds, comp_hyb_bonds, is_cr
 		nangle = len(angles_all_hyb[ri])
 		nedge = len(edges_all_hyb[ri])
 
-		# if p.debug:
-		# 	if ri == 0:
-		# 		print("")
-		# 	print(f"Angle template {ri+1} (hybridization):")
-		# 	print(atoms_all_hyb[ri])
-		# 	print(bonds_all_hyb[ri])
-		# 	print(angles_all_hyb[ri])
-		# 	print(edges_all_hyb[ri])
-		# 	print("")
+		if p.debug:
+			if ri == 0:
+				print("")
+			print(f"Angle template {ri+1} (hybridization):")
+			print(atoms_all_hyb[ri])
+			print(bonds_all_hyb[ri])
+			print(angles_all_hyb[ri])
+			print(edges_all_hyb[ri])
+			print("")
 
 		molFile = f"{outReactFold}angleHyb{ri+1:0>{len_nreact_hyb}}_mol_pre.txt"
 		with open(molFile,'w') as f:
@@ -1328,13 +1334,13 @@ def writeReactAngle(outReactFold, strands, backbone_bonds, comp_hyb_bonds, is_cr
 		nangle = len(angles_all_dehyb[ri])
 		nedge = len(edges_all_dehyb[ri])
 
-		# if p.debug:
-		# 	print(f"Angle template {ri+1} (dehybridization):")
-		# 	print(atoms_all_dehyb[ri])
-		# 	print(bonds_all_dehyb[ri])
-		# 	print(angles_all_dehyb[ri])
-		# 	print(edges_all_dehyb[ri])
-		# 	print("")
+		if p.debug:
+			print(f"Angle template {ri+1} (dehybridization):")
+			print(atoms_all_dehyb[ri])
+			print(bonds_all_dehyb[ri])
+			print(angles_all_dehyb[ri])
+			print(edges_all_dehyb[ri])
+			print("")
 
 		molFile = f"{outReactFold}angleDehyb{ri+1:0>{len_nreact_dehyb}}_mol.txt"
 		with open(molFile,'w') as f:
@@ -1392,28 +1398,28 @@ def writeReactAngle(outReactFold, strands, backbone_bonds, comp_hyb_bonds, is_cr
 
 
 ### write table for hybridization bond
-def writeBondHyb(bondFold, bondName, p):
-	bondFile = bondFold + "bond_" + bondName + ".txt"
+def writeBondHyb(bondFold, bond_res, p):
+	bondFile = bondFold + "bond_hyb.txt"
 	r12_cut_bond = np.sqrt(3)*p.dbox
-	r12_cut_bond = r12_cut_bond - r12_cut_bond%p.bond_res + p.bond_res
-	npoint = int(r12_cut_bond/p.bond_res+1)
+	r12_cut_bond = r12_cut_bond - r12_cut_bond%bond_res + bond_res
+	npoint = int(r12_cut_bond/bond_res+1)
 
 	### forced binding force (kcal/mol/nm)
 	F_force = 1
 
 	with open(bondFile, 'w') as f:
-		f.write(f"{bondName}\n")
+		f.write(f"hyb\n")
 		f.write(f"N {npoint}\n\n")
 		f.write("# r E(r) F(r)\n")
 		
 		for i in range(npoint):
 			r12 = i * r12_cut_bond / (npoint - 1)
 			if r12 < p.r12_cut_hyb:
-				U = p.U_hyb*(i*p.bond_res/p.r12_cut_hyb-1)
+				U = p.U_hyb*(i*bond_res/p.r12_cut_hyb-1)
 				F = -p.U_hyb/p.r12_cut_hyb
 			elif p.force_bind:
-				U = F_force*(i*p.bond_res-p.r12_cut_hyb)*6.96
-				F = -F_force*6.96
+				U = 6.96*F_force*(i*bond_res-p.r12_cut_hyb)
+				F = -6.96*F_force
 			else:
 				U = 0
 				F = 0
