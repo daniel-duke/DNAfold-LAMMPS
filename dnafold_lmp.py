@@ -1,24 +1,28 @@
 import arsenal as ars
 import parameters
 import numpy as np
+import random
 import copy
 import json
 import sys
 import os
 
 ## Description
-# this script takes a cadnano json file, creates the interaction and geometry
+# this script takes a caDNAno json file, creates the interaction and geometry
   # arrays necessary for the dnafold model, and writes the geometry and input
-  # files necessary to simulate the system in lammps
-# all indexing starts at 0, then is increased by 1 when written to lammps files
+  # files necessary to simulate the system in lammps.
+# all indexing starts at 0, then is increased by 1 when written to lammps files.
+# reserved staples files list the strand indices of the staples (starting from 2)
+  # to reserve, whereas reserved scaffold files list the scaffold bead indices
+  # (starting from 1) paired to the staples to reserve; the code uses reserved
+  # staple files by default, but it can use reserved scaffold if neccessary.
 
 ## Version Note
 # added capabilities: parameters output file, and the return of forced binding!
 
 # To Do
 # add blocking cases for angle template that arise from using multiple staple copies,
-  # input file, set unique charge for staples with no complements, use comm modify
-  # to enable multiple processors?
+  # input file, set unique charge for staples with no complements
 
 
 ################################################################################
@@ -27,32 +31,27 @@ import os
 def main():
 
 	### simulation ID
-	simID = "2HB"
+	simID = "16HB"
 	simTag = ""
-
-	### source folders
-	inSrcFold = getSrcFold(simID)
 	outSrcFold = "/Users/dduke/Files/dnafold_lmp/"
-
-	### file parameters
-	inCadFile = inSrcFold + simID + ".json"
-	outSimFold = outSrcFold + simID + simTag + "/"
-	outCadFile = outSimFold + simID + ".json"
+	multiSim = False
 
 	### computational parameters
-	nstep			= 1E6		# steps			- number of simulation steps
-	nstep_scaf		= 1E4		# steps			- number of steps for scaffold relaxation
-	dump_every		= 1E3		# steps			- number of steps between positions dumps
+	nstep			= 1E7		# steps			- number of simulation steps
+	nstep_relax		= 1E5		# steps			- number of steps for relaxation
+	dump_every		= 1E4		# steps			- number of steps between positions dumps
 	dt				= 0.01		# ns			- integration time step
-	dbox			= 40		# nm			- periodic boundary diameter
-	force_bind		= False		# bool			- whether to force hybridization (not applied if >1 staple copies)
-	dehyb			= False		# bool			- whether to include dehybridization reactions (unnecessary for 1 staple copy)
+	dbox			= 60		# nm			- periodic boundary diameter
+	forceBind		= False		# bool			- whether to force hybridization (not applied if >1 staple copies)
+	dehyb			= True		# bool			- whether to include dehybridization reactions (unnecessary for 1 staple copy)
 	debug			= False		# bool			- whether to include debugging output
+	rseed			= 1			# int			- random seed
 
 	### design parameters
 	nnt_per_bead	= 8			# nt			- nucleotides per bead (only 8)
-	circular_scaf	= True		# bool			- whether the scaffold is circular
-	staple_copies	= 1			# int			- number of copies for each staple
+	circularScaf	= True		# bool			- whether the scaffold is circular
+	reserveStap		= False		# bool			- whether to reserve a subset of staples for later
+	stap_copies		= 1 		# int			- number of copies for each staple
 
 	### physical parameters
 	T				= 300		# K				- temperature
@@ -60,186 +59,223 @@ def main():
 	visc			= 0.8472	# mPa/s			- viscosity (units equivalent to pN*ns/mn^2)
 
 	### interaction parameters
-	sigma			= 2.14		# nm			- bead van der Walls radius
+	sigma			= 2.14		# nm			- bead Van der Waals radius
 	epsilon			= 4			# kcal/mol		- WCA energy parameter
 	r12_eq			= 2.72		# nm			- equilibrium bead separation
-	k_x				= 80		# kcal/mol/nm2	- backbone spring constant
+	k_x				= 120		# kcal/mol/nm2	- backbone spring constant (standard definition)
 	r12_cut_hyb		= 2			# nm			- hybridization potential cutoff radius
 	U_hyb			= 10		# kcal/mol		- depth of hybridization potential
 	dsLp			= 50		# nm			- persistence length of dsDNA
 
 	### create parameters class
-	p = parameters.parameters(	nstep, nstep_scaf, dump_every, dt, dbox, force_bind, dehyb, debug,
-								nnt_per_bead, circular_scaf, staple_copies, T, r_h_bead, visc, 
+	p = parameters.parameters(	nstep, nstep_relax, dump_every, dt, dbox, forceBind, dehyb, debug, rseed,
+								nnt_per_bead, circularScaf, reserveStap, stap_copies, T, r_h_bead, visc, 
 								sigma, epsilon, r12_eq, k_x, r12_cut_hyb, U_hyb, dsLp)
-	
+
 	### prepare output folder
-	ars.createSafeFold(outSimFold)
+	outSimFold, cadFile = prepOutFold(outSrcFold, simID, simTag, multiSim, p)
 
-	### record metadata
-	p.record(outSimFold + "parameters.txt")
-	os.system(f"cp \"{inCadFile}\" \"{outCadFile}\"")
+	### read caDNAno file
+	strands, backbone_neighbors, complements, is_crossover, p = buildDNAfoldModel(cadFile, p)
 
-	### parse cadnano
-	strands, backbone_bonds, comp_hyb_bonds, is_crossover, p = buildDNAfoldModel(inCadFile, p)
+	### read and write reserved staples file
+	is_reserved_strand = readRstap(simID, p)
+	writeRstap(outSimFold, is_reserved_strand)
 
-	### write simulation and visualization geometry files
-	r, nhyb, nangle = composeGeo(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_crossover, p)
-	composeGeoVis(outSimFold, strands, backbone_bonds, r, p)
+	### write geometry files
+	random.seed(p.rseed)
+	r, nhyb, nangle = composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossover, is_reserved_strand, p)
+	composeGeoVis(outSimFold, strands, backbone_neighbors, r, p)
 
 	### write bond react files
-	nreact_bond = writeReactBond(outSimFold, backbone_bonds, comp_hyb_bonds, is_crossover, p)
+	nreact_bond = writeReactBond(outSimFold, backbone_neighbors, complements, is_crossover, p)
 
 	### write angle react files
-	nreact_angle_hyb, nreact_angle_dehyb = writeReactAngle(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_crossover, p)
+	nreact_angle_hyb, nreact_angle_dehyb = writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_crossover, p)
 
 	### write lammps input file
 	writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle_hyb, nreact_angle_dehyb, p)
 
 
 ################################################################################
-### File Managers
+### File Handlers
 
-### list of possible source folders given 
-def getSrcFold(simID):
+### find the caDNAno file in my file system
+def getCadFile(simID):
 
 	### the root of all designs
-	projects = "/Users/dduke/OneDrive - Duke University/DukeU/Research/Projects/"
+	projectsFold = "/Users/dduke/OneDrive - Duke University/DukeU/Research/Projects/"
 
 	### folders with useful designs
 	if simID.startswith("4HB"):
-		inSrcFold = projects + "elementary/cadnano/4HB/"
+		cadFold = projectsFold + "elementary/cadnano/4HB/"
+	if simID.startswith("16HB"):
+		cadFold = projectsFold + "elementary/cadnano/16HB/"
 	elif simID.startswith("ds_"):
-		inSrcFold = projects + "elementary/cadnano/strands/"
+		cadFold = projectsFold + "elementary/cadnano/strands/"
 	elif simID.startswith("sheet_"):
-		inSrcFold = projects + "elementary/cadnano/sheets/"
+		cadFold = projectsFold + "elementary/cadnano/sheets/"
 	elif simID.startswith("cube_4HB"):
-		inSrcFold = projects + "gang_cube/full_cube/designs/4HB/"
+		cadFold = projectsFold + "gang_cube/full_cube/designs/4HB/"
 	elif simID.startswith("tri_edit"):
-		inSrcFold = projects + "baigl_isotherms/sharp_triangle/"
+		cadFold = projectsFold + "baigl_isotherms/sharp_triangle/"
 	elif simID.startswith("triS_edit"):
-		inSrcFold = projects + "baigl_isotherms/sharp_triangle_small/"
+		cadFold = projectsFold + "baigl_isotherms/sharp_triangle_small/"
 
 	### default folder
 	else:
-		inSrcFold = projects + "elementary/cadnano/"
-	return inSrcFold
+		cadFold = projectsFold + "elementary/cadnano/"
+
+	### return file
+	cadFile = cadFold + simID + ".json"
+	ars.testFileExist(cadFile, "caDNAno")
+	return cadFile
 
 
-### extract necessary info from json file
-def parseJson(inFile):
-	print("Parsing JSON file...")
-	
-	### load JSON file
-	ars.testFileExist(inFile,"json")
-	with open(inFile, 'r') as f:
-		json_string = f.read()
-	j = json.loads(json_string)
+### initialize and populate output folder with basic data
+def prepOutFold(outSrcFold, simID, simTag, multiSim, p):
 
-	### initialize
-	scaffold = []
-	staples = []
-	fiveP_ends_stap = []
-	
-	### loop over virtual strands
-	for el1 in j["vstrands"]:
-		
-		### loop over the elements of the virtual strand
-		for el2_key, el2 in el1.items():
-			
-			### read virtual strand index
-			if el2_key == "num":
-				vstrand_current = el2
-			
-			### read scaffold side of virtual strand
-			elif el2_key == "scaf":
-				
-				### loop over nucleotides
-				for ni_vstrand, neighbors in enumerate(el2):
-					
-					### store virtual strand index and nucleotide index for current nucleotide and its neighbors
-					scaffold_current = [vstrand_current, int(ni_vstrand)]
-					for s in neighbors:
-						scaffold_current.append(int(s))
-					scaffold.append(scaffold_current)
-					
-					### identify 5' end
-					if scaffold_current[2] == -1 and scaffold_current[4] != -1:
-						fiveP_end_scaf = scaffold_current
-			
-			### read staple side of helix
-			elif el2_key == "stap":
-				
-				### loop over nucleotides
-				for ni_vstrand, neighbors in enumerate(el2):
-					
-					### store virtual strand index and nucleotide index for current nucleotide and its neighbors
-					staple_current = [vstrand_current, int(ni_vstrand)]
-					for s in neighbors:
-						staple_current.append(int(s))
-					staples.append(staple_current)
-					
-					### identify 5' end
-					if staple_current[2] == -1 and staple_current[4] != -1:
-						fiveP_ends_stap.append(staple_current)
-			
-	### tally up the nucleotides
-	nnt_scaf = sum(1 for s in scaffold if s[2] != -1 or s[4] != -1)
-	nnt_stap = sum(1 for s in staples if s[2] != -1 or s[4] != -1)
-	
-	### report
-	print(f"Found {nnt_scaf} scaffold nucleotides and {nnt_stap} staple nucleotides.")
-	return scaffold, staples, fiveP_end_scaf, fiveP_ends_stap, nnt_scaf, nnt_stap
+	### create simulation folder
+	outSimFold = outSrcFold + simID + simTag + "/"
+	if multiSim:
+		outSimFold += f"sim{p.rseed:02.0f}/"
+	ars.createSafeFold(outSimFold)
+
+	### record metadata
+	p.record(outSimFold + "parameters.txt")
+
+	### copy caDNAno file
+	cadFile = getCadFile(simID)
+	outCadFile = outSimFold + simID + ".json"
+	os.system(f"cp \"{cadFile}\" \"{outCadFile}\"")
+
+	### results
+	return outSimFold, cadFile
+
+
+### find the reserved scaffold file in my file system
+def getRscafFile(simID):
+	projectsFold = "/Users/dduke/OneDrive - Duke University/DukeU/Research/Projects/"
+	rscafFold = projectsFold + "dnafold_lmp/reserved_scaffold/"
+	rscafFileName = "rscaf_" + simID + ".txt"
+	return rscafFold + rscafFileName
+
+
+### read reserved scaffold file
+def readRscaf(simID, strands, complements, p):
+	is_reserved_strand = [ False for i in range(p.nstrand) ]
+
+	### skip if not reserving staples
+	if not p.reserveStap:
+		return is_reserved_strand
+
+	### read scaffold
+	rscafFile = getRscafFile(simID)
+	ars.testFileExist(rscafFile,"reserved scaffold")
+	with open(rscafFile, 'r') as f:
+		reserved_scaf = [ int(line.strip())-1 for line in f ]
+
+	### get staples
+	n_reserved = len(reserved_scaf)
+	reserved_stap = [ 0 for i in range(n_reserved) ]
+	for bi in range(n_reserved):
+		reserved_stap[bi] = complements[reserved_scaf[bi]]
+		if reserved_stap[bi] == -1:
+			print("Error: reserved scaffold bead has no compliment.")
+			sys.exit()
+
+	### make no strands are partially reserved
+	for bi in range(n_reserved):
+		is_reserved_strand[strands[reserved_stap[bi]]] = True
+	for bi in range(p.n_scaf,p.n_ori):
+		if is_reserved_strand[strands[bi]] and bi not in reserved_stap:
+			print("Error: staple partially reserved, check accuracy of reserved scaffold file.")
+			sys.exit()
+
+	### return strand reservation status
+	return is_reserved_strand
+
+
+### find the reserved staples file in my file system
+def getRstapFile(simID):
+	projectsFold = "/Users/dduke/OneDrive - Duke University/DukeU/Research/Projects/"
+	rstapFold = projectsFold + "dnafold_lmp/reserved_staples/"
+	rstapFileName = "rstap_" + simID + ".txt"
+	return rstapFold + rstapFileName
+
+
+### read reserved staples file
+def readRstap(simID, p):
+	is_reserved_strand = [ False for i in range(p.nstrand) ]
+
+	### skip if not reserving staples
+	if not p.reserveStap:
+		return is_reserved_strand
+
+	### read staples
+	rstapFile = getRstapFile(simID)
+	ars.testFileExist(rstapFile,"reserved staples")
+	with open(rstapFile, 'r') as f:
+		reserved_strands = [ int(line.strip())-1 for line in f ]
+	for si in range(len(reserved_strands)):
+		is_reserved_strand[reserved_strands[si]] = True
+
+	### return strand reservations status
+	return is_reserved_strand
+
+
+### write reserved staples file
+def writeRstap(outSimFold, is_reserved_strand):
+	rstapFile = outSimFold + "reserved_staples.txt"
+	with open(rstapFile, 'w') as f:
+		for si in range(len(is_reserved_strand)):
+			if is_reserved_strand[si]:
+				f.write(f"{si+1}\n")
 
 
 ### write lammps geometry file, for simulation
-def composeGeo(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_crossover, p):
+def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossover, is_reserved_strand, p):
 	print("Writing simulation geometry file...")
 
 	### initailize positions
 	r = initPositions(strands, p)
-	natom_real = r.shape[0]
 	r = np.append(r,np.zeros((p.n_scaf,3)),axis=0)
-	natom = r.shape[0]
 
 	### initialize
-	molecules = np.zeros(natom,dtype=int)
-	types = np.zeros(natom,dtype=int)
-	charges = np.zeros(natom)
-	bonds = np.zeros((0,3))
-	angles = np.zeros((0,4))
-	nhyb = 0
-	nangle = 0
-
-	### prepare charges
-	len_n_scaf = len(str(p.n_scaf))
-	charge_step = 1/(10**len_n_scaf)
+	molecules = np.zeros(p.nbead+p.n_scaf,dtype=int)
+	types = np.zeros(p.nbead+p.n_scaf,dtype=int)
+	charges = np.zeros(p.nbead+p.n_scaf)
+	bonds = np.zeros((0,3),dtype=int)
+	angles = np.zeros((0,4),dtype=int)
 
 	### scaffold atoms
+	charge_step = 1/(10**len(str(p.n_scaf)))
 	for bi in range(p.n_scaf):
 		molecules[bi] = strands[bi] + 1
 		types[bi] = min([1,strands[bi]]) + 1
 		charges[bi] = charge_step*(bi+1)
 
 	### staple atoms
-	for ci in range(p.staple_copies):
-		for bi in range(p.n_scaf,p.nbead):
-			ai = bi + ci*p.n_stap
-			nstap = max(strands)
-			types[ai] = min([1,strands[bi]]) + 1
-			molecules[ai] = strands[bi] + ci*nstap + 1
-			if comp_hyb_bonds[bi] != -1:
+	nhyb = 0
+	for ci in range(p.stap_copies):
+		for obi in range(p.n_scaf,p.n_ori):
+			rbi = obi + ci*p.n_stap
+			types[rbi] = min([1,strands[obi]]) + 1
+			molecules[rbi] = strands[obi] + ci*(p.nstrand-1) + 1
+			if complements[obi] != -1:
 				if ci == 0:
 					nhyb += 1
-				charges[ai] = charge_step*(comp_hyb_bonds[bi]+1)
+				charges[rbi] = charge_step*(complements[obi]+1)
+			if is_reserved_strand[strands[obi]]:
+				types[rbi] = 3
+				r[rbi] = [0,0,0]
 
 	### dummy atoms
-	for bi in range(p.n_scaf):
-		ai = bi + natom_real
-		molecules[ai] = 0
-		types[ai] = 3
-		if bi < p.n_scaf:
-			charges[ai] = is_crossover[bi] + 1
+	for sbi in range(p.n_scaf):
+		dbi = sbi + p.nbead
+		molecules[dbi] = 0
+		types[dbi] = 3
+		charges[dbi] = is_crossover[sbi] + 1
 
 	### scaffold backbone bonds
 	for bi in range(p.n_scaf-1):
@@ -249,44 +285,49 @@ def composeGeo(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_crossover
 		bonds = np.append(bonds,[[type,atom1,atom2]],axis=0)
 
 	### scaffold end-to-end bond
-	if p.circular_scaf:
+	if p.circularScaf:
 		bonds = np.append(bonds,[[1,p.n_scaf,1]],axis=0)
 	else:
-		if getScafNeighbors(p.n_scaf-1,backbone_bonds,comp_hyb_bonds)[1] == 0:
+		if getScafNeighbors(p.n_scaf-1,backbone_neighbors,complements)[1] == 0:
 			bonds = np.append(bonds,[[3,1,p.n_scaf]],axis=0)
-			bonds = np.append(bonds,[[3,1,p.n_scaf+natom_real]],axis=0)
-			bonds = np.append(bonds,[[3,p.n_scaf,1+natom_real]],axis=0)
+			bonds = np.append(bonds,[[3,1,p.n_scaf+p.nbead]],axis=0)
+			bonds = np.append(bonds,[[3,p.n_scaf,1+p.nbead]],axis=0)
 
 	### staple backbone bonds
-	for ci in range(p.staple_copies):
-		for bi in range(p.n_scaf,p.nbead):
-			if backbone_bonds[bi][1] != -1:
-				type = 1
-				atom1 = bi + ci*p.n_stap + 1
-				atom2 = backbone_bonds[bi][1] + ci*p.n_stap + 1
+	for ci in range(p.stap_copies):
+		for obi in range(p.n_scaf,p.n_ori):
+			bi_3p = backbone_neighbors[obi][1]
+			if bi_3p != -1:
+				if is_reserved_strand[strands[obi]]:
+					type = 3
+				else:
+					type = 1
+				atom1 = obi + ci*p.n_stap + 1
+				atom2 = backbone_neighbors[obi][1] + ci*p.n_stap + 1
 				bonds = np.append(bonds,[[type,atom1,atom2]],axis=0)
 
 	### dummy bonds
 	for bi in range(p.n_scaf):
 		type = 3
 		atom1 = bi + 1
-		atom2 = bi + natom_real + 1
+		atom2 = bi + p.nbead + 1
 		bonds = np.append(bonds,[[type,atom1,atom2]],axis=0)
 
 	### hybridization bonds
-	if p.force_bind:
+	if p.forceBind:
 		for bi in range(p.n_scaf):
-			if comp_hyb_bonds[bi] != -1:
+			if complements[bi] != -1:
 				type = 2
 				atom1 = bi + 1
-				atom2 = comp_hyb_bonds[bi] + 1
+				atom2 = complements[bi] + 1
 				bonds = np.append(bonds,[[type,atom1,atom2]],axis=0)
 
-	### scaffold angles
+	### count angles
+	nangle = 0
 	for bi in range(p.n_scaf):
-		bi_5p,bi_3p = getScafNeighbors(bi,backbone_bonds,comp_hyb_bonds)
+		bi_5p,bi_3p = getScafNeighbors(bi,backbone_neighbors,complements)
 		if bi_5p != -1 and bi_3p != -1:
-			if comp_hyb_bonds[bi_5p] != -1 and comp_hyb_bonds[bi] != -1 and comp_hyb_bonds[bi_3p] != -1:
+			if complements[bi_5p] != -1 and complements[bi] != -1 and complements[bi_3p] != -1:
 				nangle += 1
 
 	### write file
@@ -294,39 +335,36 @@ def composeGeo(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_crossover
 	ars.writeGeo(outGeoFile, p.dbox, r, molecules, types, bonds, nangleType=2, charges=charges)
 
 	### return positions (without dummy atoms)
-	r = r[0:natom_real]
+	r = r[0:p.nbead]
 	return r, nhyb, nangle
 
 
 ### write lammps geometry file, for visualization
-def composeGeoVis(outSimFold, strands, backbone_bonds, r, p):
-
-	### count atoms
-	natom = r.shape[0]
+def composeGeoVis(outSimFold, strands, backbone_neighbors, r, p):
 
 	### initialize
-	molecules = np.zeros(natom,dtype=int)
-	types = np.zeros(natom,dtype=int)
-	bonds = np.zeros((0,3))
+	molecules = np.zeros(p.nbead,dtype=int)
+	types = np.ones(p.nbead,dtype=int)
+	bonds = np.zeros((0,3),dtype=int)
 
 	### compile atom information
-	for ai in range(natom):
-		bi = ai2bi(ai, p)
-		types[ai] = strands[bi] + 1
+	for rbi in range(p.n_scaf,p.nbead):
+		obi = rbi2obi(rbi, p)
+		types[rbi] = strands[obi] + 1
 
 	### compile bond information
 	for bi in range(p.n_scaf):
-		if backbone_bonds[bi][1] != -1:
+		if backbone_neighbors[bi][1] != -1:
 			type = 1
 			atom1 = bi + 1
-			atom2 = backbone_bonds[bi][1] + 1
+			atom2 = backbone_neighbors[bi][1] + 1
 			bonds = np.append(bonds,[[type,atom1,atom2]],axis=0)
-	for ci in range(p.staple_copies):
-		for bi in range(p.n_scaf,p.nbead):
-			if backbone_bonds[bi][1] != -1:
+	for ci in range(p.stap_copies):
+		for bi in range(p.n_scaf,p.n_ori):
+			if backbone_neighbors[bi][1] != -1:
 				type = 1
 				atom1 = bi + ci*p.n_stap + 1
-				atom2 = backbone_bonds[bi][1] + ci*p.n_stap + 1
+				atom2 = backbone_neighbors[bi][1] + ci*p.n_stap + 1
 				bonds = np.append(bonds,[[type,atom1,atom2]],axis=0)
 
 	### write file
@@ -339,17 +377,18 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle
 	print("Writing input file...")
 
 	### computational parameters
-	verlet_skin			= 4		# nm		- width of neighbor list skin (= r12_cut - sigma)
-	neigh_every			= 10	# steps		- how often to consider updating neighbor list
-	bond_res 			= 0.1	# nm		- distance between tabular bond interpolation points
-	react_every_bond	= 1E1	# steps		- how often to check for new hybridization bonds
-	r12_cut_react_bond	= 4		# nm		- cutoff radius for potential hybridization bonds
-	react_every_angle	= 1E4	# steps		- how often to check for new hybridization angles
+	verlet_skin				= 4		# nm		- width of neighbor list skin (= r12_cut - sigma)
+	neigh_every				= 10	# steps		- how often to consider updating neighbor list
+	bond_res 				= 0.1	# nm		- distance between tabular bond interpolation points
+	r12_cut_react_bond		= 4		# nm		- cutoff radius for potential hybridization bonds
+	react_every_bond		= 1E2	# steps		- how often to check for new hybridization bonds
+	react_every_angle_hyb	= 1E4	# steps		- how often to check for new hybridization angles
+	react_every_angle_dehyb	= 1E2	# steps		- how often to check for removed hybridization angles
 
 	### bond file calculations
-	r12_cut_bond = np.sqrt(3)*p.dbox
-	r12_cut_bond = r12_cut_bond - r12_cut_bond%bond_res + bond_res
-	npoint_bond = int(r12_cut_bond/bond_res+1)
+	r12_max = np.sqrt(3)*p.dbox/2
+	r12_max = r12_max - r12_max%bond_res + bond_res
+	npoint_bond = int(r12_max/bond_res+1)
 
 	### count digits
 	len_nreact_bond = len(str(nreact_bond))
@@ -357,7 +396,7 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle
 	len_nreact_angle_dehyb = len(str(nreact_angle_dehyb))
 
 	### write table for hybridization bond
-	writeBondHyb(outSimFold, bond_res, p)
+	writeBondHyb(outSimFold, bond_res, r12_max, p)
 
 	### open file
 	outLammpsFile = outSimFold + "lammps.in"
@@ -370,7 +409,7 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle
 
 		### initialize environment
 		f.write(
-			"## Environment Initialization\n"
+			"## Environment\n"
 			"units           nano\n"
 			"dimension       3\n"
 			"boundary        p p p\n"
@@ -378,30 +417,27 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle
 
 		### read geometry data
 		f.write(
-			"## Reading Geometry Data\n"
+			"## Geometry\n"
 			"read_data       geometry.in &\n"
-			"                extra/bond/per/atom 100 &\n"
-			"                extra/angle/per/atom 100 &\n"
+			"                extra/bond/per/atom 10 &\n"
+			"                extra/angle/per/atom 10 &\n"
 			"                extra/special/per/atom 100\n\n")
 
 		### neighbor list
 		f.write(
-			"## Parameters Definitions\n"
-		   f"neighbor        {verlet_skin} bin\n"
-		   f"neigh_modify    every {int(neigh_every)}\n")
-
-		### pairwise interactions
-		f.write(
-		   f"pair_style      hybrid zero {round(p.r12_cut_WCA,2)} lj/cut {round(p.r12_cut_WCA,2)}\n"
+			"## Parameters\n"
+		   f"neighbor        {verlet_skin:0.2f} bin\n"
+		   f"neigh_modify    every {int(neigh_every)}\n"
+		   f"pair_style      hybrid zero {p.r12_cut_WCA:0.2f} lj/cut {p.r12_cut_WCA:0.2f}\n"
 			"pair_modify     pair lj/cut shift yes\n"
-		   f"pair_coeff      * * lj/cut {p.epsilon} {p.sigma} {round(p.r12_cut_WCA,2)}\n"
+		   f"pair_coeff      * * lj/cut {p.epsilon:0.2f} {p.sigma:0.2f} {p.r12_cut_WCA:0.2f}\n"
 		    "pair_coeff      * 3 zero\n"
-		    "special_bonds   lj 0.0 1.0 1.0\n")
+			"special_bonds   lj 0.0 1.0 1.0\n")
 
 		### bonded interactions
 		f.write(
 		   f"bond_style      hybrid zero harmonic table linear {npoint_bond}\n"
-		   f"bond_coeff      1 harmonic {p.k_x} {p.r12_eq}\n"
+		   f"bond_coeff      1 harmonic {p.k_x/2:0.2f} {p.r12_eq:0.2f}\n"
 		   f"bond_coeff      2 table bond_hyb.txt hyb\n"
 		    "bond_coeff      3 zero\n")
 
@@ -409,25 +445,25 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle
 		if nangle:
 			f.write(
 			   f"angle_style     harmonic\n"
-			   f"angle_coeff     1 {round(p.k_theta/2,2)} 180\n"
-			   f"angle_coeff     2 {round(p.k_theta/2,2)} 90\n")
+			   f"angle_coeff     1 {p.k_theta/2:0.2f} 180\n"
+			   f"angle_coeff     2 {p.k_theta/2:0.2f} 90\n")
 
 		### group atoms
 		f.write(
-			"group           scaffold type 1\n"
-			"group           real type 1 2\n"
-			"variable        var1 atom q\n\n")
+			"variable        var1 atom q\n"
+		   f"group           real id <= {p.nbead}\n"
+			"group           mobile type 1 2\n\n")
 
-		### relax scaffold
+		### relax everything
 		f.write(
-			"## Scaffold Relaxation\n"
-		   f"fix             tstat1 scaffold langevin {p.T} {p.T} {round(1/p.gamma_t,4)} 37\n"
-			"fix             tstat2 scaffold nve\n"
-		   f"timestep        {p.dt/10}\n"
-		   f"run             {int(p.nstep_scaf)}\n"
-			"reset_timestep  0\n"
+			"## Relaxation\n"
+		   f"fix             tstat1 mobile langevin {p.T} {p.T} {1/p.gamma_t:0.4f} {p.rseed}\n"
+			"fix             tstat2 mobile nve/limit 0.1\n"
+		   f"timestep        {p.dt}\n"
+		   f"run             {int(p.nstep_relax)}\n"
 			"unfix           tstat1\n"
-			"unfix           tstat2\n\n")
+			"unfix           tstat2\n"
+			"reset_timestep  0\n\n")
 
 		### reactions
 		if nreact_angle_hyb or nreact_bond:
@@ -475,26 +511,17 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle
 			for ri in range(nreact_angle_hyb):
 				for i in range(react_copies):
 					f.write(
-			   f" &\n                react angleHyb{ri*2+i+1:0>{len_nreact_angle_hyb}} all {int(react_every_angle)} 0.0 {p.r12_cut_hyb:.1f} angleHyb{ri+1:0>{len_nreact_angle_hyb}}_mol_pre angleHyb{ri+1:0>{len_nreact_angle_hyb}}_mol_pst react/angleHyb{ri+1:0>{len_nreact_angle_hyb}}_map.txt custom_charges 4")
+			   f" &\n                react angleHyb{ri+1:0>{len_nreact_angle_hyb}} all {int(react_every_angle_hyb)} 0.0 {p.r12_cut_hyb:.1f} angleHyb{ri+1:0>{len_nreact_angle_hyb}}_mol_pre angleHyb{ri+1:0>{len_nreact_angle_hyb}}_mol_pst react/angleHyb{ri+1:0>{len_nreact_angle_hyb}}_map.txt custom_charges 4")
 
 			### angle dehybridization reactions
 			for ri in range(nreact_angle_dehyb):
 				f.write(
-			   f" &\n                react angleDehyb{ri+1:0>{len_nreact_angle_dehyb}} all {int(react_every_bond)} {p.r12_cut_hyb:.1f} {r12_cut_bond:.1f} angleDehyb{ri+1:0>{len_nreact_angle_dehyb}}_mol angleDehyb{ri+1:0>{len_nreact_angle_dehyb}}_mol react/angleDehyb{ri+1:0>{len_nreact_angle_dehyb}}_map.txt custom_charges 2")
+			   f" &\n                react angleDehyb{ri+1:0>{len_nreact_angle_dehyb}} all {int(react_every_angle_dehyb)} {p.r12_cut_hyb:.1f} {r12_max:.1f} angleDehyb{ri+1:0>{len_nreact_angle_dehyb}}_mol angleDehyb{ri+1:0>{len_nreact_angle_dehyb}}_mol react/angleDehyb{ri+1:0>{len_nreact_angle_dehyb}}_map.txt custom_charges 4")
 			f.write("\n\n")
-
-		### setup simulation
-		f.write(
-			"## Simulation Setup\n"
-		   f"fix             tstat1 real langevin {p.T} {p.T} {round(1/p.gamma_t,4)} 37\n"
-			"fix             tstat2 real nve\n"
-		   f"dump            dump1 real custom {int(p.dump_every)} trajectory.dat id mol xs ys zs\n"
-			"dump_modify     dump1 sort id append yes\n"
-		   f"timestep        {p.dt}\n\n")
 
 		### binding updates
 		f.write(
-			"## Binding Updates\n"
+			"## Updates\n"
 			"compute         bond_energies all bond/local engpot\n"
 			"compute         angle_energies all angle/local eng\n"
 		   f"fix             bond_hist all ave/histo {int(p.dump_every)} 1 {int(p.dump_every)} {-int(p.U_hyb)} -1E-6 1 c_bond_energies mode vector\n"
@@ -507,10 +534,10 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle
                            f"{nhyb}" + " hybridizations  |  ${angle_count}/"
                            f"{nangle}" + " angles activated\"\n\n")
 
-		### debugging
+		### debugging output
 		if p.debug:
 			f.write(
-				"## Debugging Output\n"
+				"## Debugging\n"
 				"compute         compD1a all bond/local dist engpot\n"
 				"compute         compD1b all property/local btype batom1 batom2\n"
 			   f"dump            dumpD1 all local {int(p.dump_every)} dump_bonds.dat index c_compD1a[1] c_compD1a[2] c_compD1b[1] c_compD1b[2] c_compD1b[3] \n"
@@ -521,22 +548,29 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle
 				"dump_modify     dumpD2 append yes\n"
 			   f"dump            dumpD3 all custom {int(p.dump_every)} dump_charges.dat id q\n"
 				"dump_modify     dumpD3 sort id append yes\n")
-			f.write("\n")
 
-		### run
+		### 
+		f.write(
+			"## Production\n"
+		   f"fix             tstat1 mobile langevin {p.T} {p.T} {1/p.gamma_t:0.4f} {p.rseed}\n"
+			"fix             tstat2 mobile nve\n"
+		   f"timestep        {p.dt}\n"
+		   f"dump            dump1 real custom {int(p.dump_every)} trajectory.dat id mol xs ys zs\n"
+			"dump_modify     dump1 sort id append yes\n"
+		   f"restart         {int(p.dump_every/2)} restart_binary1.out restart_binary2.out\n\n")
+
 		f.write(
 			"## Go Time\n"
 		   f"run             {int(p.nstep)}\n"
-			"write_data      restart_geometry.out\n"
-			"write_restart   restart_binary.out\n\n")
+			"write_data      restart_geometry.out\n\n")
 
 
 ### write reaction files for hybridization angles
-def writeReactBond(outSimFold, backbone_bonds, comp_hyb_bonds, is_crossover, p):
+def writeReactBond(outSimFold, backbone_neighbors, complements, is_crossover, p):
 	print("Writing bond react files...")
 
 	### no reactions necessary for forced binding
-	if p.force_bind:
+	if p.forceBind:
 		return 0
 
 	### initialize
@@ -552,18 +586,18 @@ def writeReactBond(outSimFold, backbone_bonds, comp_hyb_bonds, is_crossover, p):
 		comp_3p = False
 
 		### get neighbors to central scaffold bead
-		b_5p,b_3p = getScafNeighbors(bi,backbone_bonds,comp_hyb_bonds)
+		b_5p,b_3p = getScafNeighbors(bi,backbone_neighbors,complements)
 
 		### skip if central scaffold bead is not complimentary
-		if comp_hyb_bonds[bi] == -1:
+		if complements[bi] == -1:
 			continue
 
 		#-------- working from 5' scaffold end --------#
 
 		### intialize
 		b = bi
-		bC = comp_hyb_bonds[b]
-		bD = b + p.n_scaf + p.n_stap*p.staple_copies
+		bC = complements[b]
+		bD = b + p.nbead
 
 		### core topology
 		atoms_5to3 =  [ [0,-1,b], [1,-1,bC], [2,int(is_crossover[b]),bD] ]
@@ -574,10 +608,10 @@ def writeReactBond(outSimFold, backbone_bonds, comp_hyb_bonds, is_crossover, p):
 		if b_5p != -1:
 			atoms_5to3.append([0,-1,b_5p])
 			edges_5to3.append(b_5p)
-			if b_5p == backbone_bonds[b][0]:
+			if b_5p == backbone_neighbors[b][0]:
 				bonds_5to3.append([0,b_5p,b])
 			else:
-				b_5p_D = b_5p + p.n_scaf + p.n_stap*p.staple_copies
+				b_5p_D = b_5p + p.nbead
 				atoms_5to3.append([2,int(is_crossover[b_5p]),b_5p_D])
 				edges_5to3.append(b_5p_D)
 				bonds_5to3.append([2,b_5p,b])
@@ -589,10 +623,10 @@ def writeReactBond(outSimFold, backbone_bonds, comp_hyb_bonds, is_crossover, p):
 		if b_3p != -1:
 			atoms_5to3.append([0,-1,b_3p])
 			edges_5to3.append(b_3p)
-			if b_3p == backbone_bonds[b][1]:
+			if b_3p == backbone_neighbors[b][1]:
 				bonds_5to3.append([0,b,b_3p])
 			else:
-				b_3p_D = b_3p + p.n_scaf + p.n_stap*p.staple_copies
+				b_3p_D = b_3p + p.nbead
 				atoms_5to3.append([2,int(is_crossover[b_3p]),b_3p_D])
 				edges_5to3.append(b_3p_D)
 				bonds_5to3.append([2,b,b_3p])
@@ -601,26 +635,26 @@ def writeReactBond(outSimFold, backbone_bonds, comp_hyb_bonds, is_crossover, p):
 				bonds_5to3.append([2,b_3p,bD])
 
 		### add central staple 5' end topology
-		bC_5p = backbone_bonds[bC][0]
+		bC_5p = backbone_neighbors[bC][0]
 		if bC_5p != -1:
 			atoms_5to3.append([1,-1,bC_5p])
 			bonds_5to3.append([0,bC_5p,bC])
 			edges_5to3.append(bC_5p)
 
 		### add central staple 3' end topology
-		bC_3p = backbone_bonds[bC][1]
+		bC_3p = backbone_neighbors[bC][1]
 		if bC_3p != -1:
 			atoms_5to3.append([1,-1,bC_3p])
 			bonds_5to3.append([0,bC,bC_3p])
 			edges_5to3.append(bC_3p)
 
 		### add central scaffold 5' end hybridization bond
-		if b_5p != -1 and bC_3p != -1 and bC_3p == comp_hyb_bonds[b_5p]:
+		if b_5p != -1 and bC_3p != -1 and bC_3p == complements[b_5p]:
 			comp_5p = True
 			bonds_5to3.append([1,b_5p,bC_3p])
 
 		### add central scaffold 3' end hybridization bond
-		if b_3p != -1 and bC_5p != -1 and bC_5p == comp_hyb_bonds[b_3p]:
+		if b_3p != -1 and bC_5p != -1 and bC_5p == complements[b_3p]:
 			comp_3p = True
 			bonds_5to3.append([1,b_3p,bC_5p])
 
@@ -628,8 +662,8 @@ def writeReactBond(outSimFold, backbone_bonds, comp_hyb_bonds, is_crossover, p):
 
 		### intialize
 		b = bi
-		bC = comp_hyb_bonds[b]
-		bD = b + p.n_scaf + p.n_stap*p.staple_copies
+		bC = complements[b]
+		bD = b + p.nbead
 
 		### core topology
 		atoms_3to5 =  [ [0,-1,b], [1,-1,bC], [2,int(is_crossover[b]),bD] ]
@@ -640,10 +674,10 @@ def writeReactBond(outSimFold, backbone_bonds, comp_hyb_bonds, is_crossover, p):
 		if b_3p != -1:
 			atoms_3to5.append([0,-1,b_3p])
 			edges_3to5.append(b_3p)
-			if b_3p == backbone_bonds[b][1]:
+			if b_3p == backbone_neighbors[b][1]:
 				bonds_3to5.append([0,b_3p,b])
 			else:
-				b_3p_D = b_3p + p.n_scaf + p.n_stap*p.staple_copies
+				b_3p_D = b_3p + p.nbead
 				atoms_3to5.append([2,int(is_crossover[b_3p]),b_3p_D])
 				edges_3to5.append(b_3p_D)
 				bonds_3to5.append([2,b_3p,b])
@@ -655,10 +689,10 @@ def writeReactBond(outSimFold, backbone_bonds, comp_hyb_bonds, is_crossover, p):
 		if b_5p != -1:
 			atoms_3to5.append([0,-1,b_5p])
 			edges_3to5.append(b_5p)
-			if b_5p == backbone_bonds[b][0]:
+			if b_5p == backbone_neighbors[b][0]:
 				bonds_3to5.append([0,b,b_5p])
 			else:
-				b_5p_D = b_5p + p.n_scaf + p.n_stap*p.staple_copies
+				b_5p_D = b_5p + p.nbead
 				atoms_3to5.append([2,int(is_crossover[b_5p]),b_5p_D])
 				edges_3to5.append(b_5p_D)
 				bonds_3to5.append([2,b,b_5p])
@@ -667,14 +701,14 @@ def writeReactBond(outSimFold, backbone_bonds, comp_hyb_bonds, is_crossover, p):
 				bonds_3to5.append([2,b_5p,bD])
 
 		### add central staple 3' end topology
-		bC_3p = backbone_bonds[bC][1]
+		bC_3p = backbone_neighbors[bC][1]
 		if bC_3p != -1:
 			atoms_3to5.append([1,-1,bC_3p])
 			bonds_3to5.append([0,bC_3p,bC])
 			edges_3to5.append(bC_3p)
 
 		### add central staple 5' end topology
-		bC_5p = backbone_bonds[bC][0]
+		bC_5p = backbone_neighbors[bC][0]
 		if bC_5p != -1:
 			atoms_3to5.append([1,-1,bC_5p])
 			bonds_3to5.append([0,bC,bC_5p])
@@ -765,6 +799,7 @@ def writeReactBond(outSimFold, backbone_bonds, comp_hyb_bonds, is_crossover, p):
 	nreact = len(atoms_all)
 	len_nreact = len(str(nreact))
 	outReactFold = outSimFold + "react/"
+	ars.createEmptyFold(outReactFold)
 
 	for ri in range(nreact):
 
@@ -856,7 +891,7 @@ def writeReactBond(outSimFold, backbone_bonds, comp_hyb_bonds, is_crossover, p):
 
 
 ### write reaction files for hybridization angles
-def writeReactAngle(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_crossover, p):
+def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_crossover, p):
 	print("Writing angle react files...")
 
 	### initialize hyb
@@ -875,14 +910,14 @@ def writeReactAngle(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_cros
 	for bi in range(p.n_scaf):
 
 		### get neighbors to candidate bead
-		bi_5p,bi_3p = getScafNeighbors(bi,backbone_bonds,comp_hyb_bonds)
+		bi_5p,bi_3p = getScafNeighbors(bi,backbone_neighbors,complements)
 
 		### skip if core scaffold is not present
 		if bi_5p == -1 or bi_3p == -1:
 			continue
 
 		### skip if core scaffold is not fully complimentary
-		if comp_hyb_bonds[bi_5p] == -1 or comp_hyb_bonds[bi] == -1 or comp_hyb_bonds[bi_3p] == -1:
+		if complements[bi_5p] == -1 or complements[bi] == -1 or complements[bi_3p] == -1:
 			continue
 
 		#-------- working from 5' scaffold end --------#
@@ -891,12 +926,12 @@ def writeReactAngle(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_cros
 		a = bi_5p
 		b = bi
 		c = bi_3p
-		aC = comp_hyb_bonds[a]
-		bC = comp_hyb_bonds[b]
-		cC = comp_hyb_bonds[c]
-		aD = a + p.n_scaf + p.n_stap*p.staple_copies
-		bD = b + p.n_scaf + p.n_stap*p.staple_copies
-		cD = c + p.n_scaf + p.n_stap*p.staple_copies
+		aC = complements[a]
+		bC = complements[b]
+		cC = complements[c]
+		aD = a + p.nbead
+		bD = b + p.nbead
+		cD = c + p.nbead
 
 		### core topology
 		atoms_5to3 =  [ [0,-1,a], [0,-1,b], [0,-1,c], [1,-1,cC], [1,-1,bC], [1,-1,aC], [2,int(is_crossover[a]),aD], [2,int(is_crossover[b]),bD], [2,int(is_crossover[c]),cD] ]
@@ -905,7 +940,7 @@ def writeReactAngle(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_cros
 		edges_5to3 =  [ cC, aC ]
 
 		### add core 5' side topology
-		if backbone_bonds[b][0] == a:
+		if backbone_neighbors[b][0] == a:
 			bonds_5to3.append([0,a,b])
 		else:
 			bonds_5to3.append([2,a,b])
@@ -913,7 +948,7 @@ def writeReactAngle(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_cros
 			bonds_5to3.append([2,a,bD])
 
 		### add core 3' side topology
-		if backbone_bonds[b][1] == c:
+		if backbone_neighbors[b][1] == c:
 			bonds_5to3.append([0,b,c])
 		else:
 			bonds_5to3.append([2,b,c])
@@ -921,39 +956,39 @@ def writeReactAngle(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_cros
 			bonds_5to3.append([2,c,bD])
 
 		### add scaffold 5' end topology
-		a_5p = getScafNeighbors(a, backbone_bonds, comp_hyb_bonds)[0]
+		a_5p = getScafNeighbors(a, backbone_neighbors, complements)[0]
 		if a_5p != -1:
 			atoms_5to3.append([0,-1,a_5p])
 			angles_5to3.append([int(is_crossover[a]),a_5p,a,b,0])
 			edges_5to3.append(a_5p)
-			if backbone_bonds[a][0] == a_5p:
+			if backbone_neighbors[a][0] == a_5p:
 				bonds_5to3.append([0,a_5p,a])
 			else:
 				bonds_5to3.append([2,a_5p,a])
-				a_5p_D = a_5p + p.n_scaf + p.n_stap*p.staple_copies
+				a_5p_D = a_5p + p.nbead
 				atoms_5to3.append([2,int(is_crossover[a_5p]),a_5p_D])
 				bonds_5to3.append([2,a_5p,a_5p_D])
 				bonds_5to3.append([2,a,a_5p_D])
 				bonds_5to3.append([2,a_5p,aD])
 
 		### add scaffold 3' end topology
-		c_3p = getScafNeighbors(c, backbone_bonds, comp_hyb_bonds)[1]
+		c_3p = getScafNeighbors(c, backbone_neighbors, complements)[1]
 		if c_3p != -1:
 			atoms_5to3.append([0,-1,c_3p])
 			angles_5to3.append([int(is_crossover[c]),b,c,c_3p,2])
 			edges_5to3.append(c_3p)
-			if backbone_bonds[c][1] == c_3p:
+			if backbone_neighbors[c][1] == c_3p:
 				bonds_5to3.append([0,c,c_3p])
 			else:
 				bonds_5to3.append([2,c,c_3p])
-				c_3p_D = c_3p + p.n_scaf + p.n_stap*p.staple_copies
+				c_3p_D = c_3p + p.nbead
 				atoms_5to3.append([2,int(is_crossover[c_3p]),c_3p_D])
 				bonds_5to3.append([2,c_3p,c_3p_D])
 				bonds_5to3.append([2,c,c_3p_D])
 				bonds_5to3.append([2,c_3p,cD])
 
 		### add central staple 5' end topology
-		bC_5p = backbone_bonds[bC][0]
+		bC_5p = backbone_neighbors[bC][0]
 		if bC_5p == cC:
 			bonds_5to3.append([0,cC,bC])
 		elif bC_5p != -1:
@@ -963,7 +998,7 @@ def writeReactAngle(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_cros
 			bonds_5to3.append([0,bC_5p,bC])
 
 		### add central staple 3' end topology
-		bC_3p = backbone_bonds[bC][1]
+		bC_3p = backbone_neighbors[bC][1]
 		if bC_3p == aC:
 			bonds_5to3.append([0,bC,aC])
 		elif bC_3p != -1:
@@ -978,12 +1013,12 @@ def writeReactAngle(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_cros
 		a = bi_3p
 		b = bi
 		c = bi_5p
-		aC = comp_hyb_bonds[a]
-		bC = comp_hyb_bonds[b]
-		cC = comp_hyb_bonds[c]
-		aD = a + p.n_scaf + p.n_stap*p.staple_copies
-		bD = b + p.n_scaf + p.n_stap*p.staple_copies
-		cD = c + p.n_scaf + p.n_stap*p.staple_copies
+		aC = complements[a]
+		bC = complements[b]
+		cC = complements[c]
+		aD = a + p.nbead
+		bD = b + p.nbead
+		cD = c + p.nbead
 
 		### core topology
 		atoms_3to5 =  [ [0,-1,a], [0,-1,b], [0,-1,c], [1,-1,cC], [1,-1,bC], [1,-1,aC], [2,int(is_crossover[a]),aD], [2,int(is_crossover[b]),bD], [2,int(is_crossover[c]),cD] ]
@@ -992,7 +1027,7 @@ def writeReactAngle(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_cros
 		edges_3to5 =  [ cC, aC ]
 
 		### add core 3' side topology
-		if backbone_bonds[b][1] == a:
+		if backbone_neighbors[b][1] == a:
 			bonds_3to5.append([0,a,b])
 		else:
 			bonds_3to5.append([2,a,b])
@@ -1000,7 +1035,7 @@ def writeReactAngle(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_cros
 			bonds_3to5.append([2,a,bD])
 
 		### add core 5' side topology
-		if backbone_bonds[b][0] == c:
+		if backbone_neighbors[b][0] == c:
 			bonds_3to5.append([0,b,c])
 		else:
 			bonds_3to5.append([2,b,c])
@@ -1008,39 +1043,39 @@ def writeReactAngle(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_cros
 			bonds_3to5.append([2,c,bD])
 
 		### add scaffold 3' end topology
-		a_3p = getScafNeighbors(a, backbone_bonds, comp_hyb_bonds)[1]
+		a_3p = getScafNeighbors(a, backbone_neighbors, complements)[1]
 		if a_3p != -1:
 			atoms_3to5.append([0,-1,a_3p])
 			angles_3to5.append([int(is_crossover[a]),a_3p,a,b,0])
 			edges_3to5.append(a_3p)
-			if backbone_bonds[a][1] == a_3p:
+			if backbone_neighbors[a][1] == a_3p:
 				bonds_3to5.append([0,a_3p,a])
 			else:
 				bonds_3to5.append([2,a_3p,a])
-				a_3p_D = a_3p + p.n_scaf + p.n_stap*p.staple_copies
+				a_3p_D = a_3p + p.nbead
 				atoms_3to5.append([2,int(is_crossover[a_3p]),a_3p_D])
 				bonds_3to5.append([2,a_3p,a_3p_D])
 				bonds_3to5.append([2,a,a_3p_D])
 				bonds_3to5.append([2,a_3p,aD])
 
 		### add scaffold 5' end topology
-		c_5p = getScafNeighbors(c, backbone_bonds, comp_hyb_bonds)[0]
+		c_5p = getScafNeighbors(c, backbone_neighbors, complements)[0]
 		if c_5p != -1:
 			atoms_3to5.append([0,-1,c_5p])
 			angles_3to5.append([int(is_crossover[c]),b,c,c_5p,2])
 			edges_3to5.append(c_5p)
-			if backbone_bonds[c][0] == c_5p:
+			if backbone_neighbors[c][0] == c_5p:
 				bonds_3to5.append([0,c,c_5p])
 			else:
 				bonds_3to5.append([2,c,c_5p])
-				c_5p_D = c_5p + p.n_scaf + p.n_stap*p.staple_copies
+				c_5p_D = c_5p + p.nbead
 				atoms_3to5.append([2,int(is_crossover[c_5p]),c_5p_D])
 				bonds_3to5.append([2,c_5p,c_5p_D])
 				bonds_3to5.append([2,c,c_5p_D])
 				bonds_3to5.append([2,c_5p,cD])
 
 		### add central staple 3' end topology
-		bC_3p = backbone_bonds[bC][1]
+		bC_3p = backbone_neighbors[bC][1]
 		if bC_3p == cC:
 			bonds_3to5.append([0,cC,bC])
 		elif bC_3p != -1:
@@ -1050,7 +1085,7 @@ def writeReactAngle(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_cros
 			bonds_3to5.append([0,bC_3p,bC])
 
 		### add central staple 5' end topology
-		bC_5p = backbone_bonds[bC][0]
+		bC_5p = backbone_neighbors[bC][0]
 		if bC_5p == aC:
 			bonds_3to5.append([0,bC,aC])
 		elif bC_5p != -1:
@@ -1313,7 +1348,8 @@ def writeReactAngle(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_cros
 				f.write(f"{edges_all_hyb[ri][edgei]+1}\n")
 			
 			f.write("\nConstraints\n\n")
-			f.write(f"custom \"round(rxnsum(v_var1,{angles_all_hyb[ri][0][4]+1})) == {angles_all_hyb[ri][0][0]+1}\"\n")
+			f.write(f"custom \"round(rxnsum(v_var1,{angles_all_hyb[ri][0][4]+1})) == {angles_all_hyb[ri][0][0]+1} || "
+							 f"round(rxnsum(v_var1,{angles_all_hyb[ri][0][4]+1})) == {angles_all_hyb[ri][0][0]+3}\"\n")
 			if nangle >= 2:
 				f.write(f"custom \"round(rxnsum(v_var1,{angles_all_hyb[ri][1][4]+1})) == {angles_all_hyb[ri][1][0]+1}\"\n")
 			if nangle >= 3:
@@ -1352,7 +1388,7 @@ def writeReactAngle(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_cros
 			f.write("## Dehybridization\n")
 			f.write(f"{natom} atoms\n")
 			f.write(f"{nbond} bonds\n")
-			f.write(f"2 fragments\n")
+			f.write(f"4 fragments\n")
 
 			f.write("\nTypes\n\n")
 			for atomi in range(natom):
@@ -1367,8 +1403,10 @@ def writeReactAngle(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_cros
 				f.write(f"{atomi+1}\t{atoms[atomi][1]+1}\n")
 
 			f.write("\nFragments\n\n")
-			f.write("1\t8\n")
-			f.write("2\t7 8 9\n")
+			f.write("1\t7\n")
+			f.write("2\t8\n")
+			f.write("3\t9\n")
+			f.write("4\t7 8 9\n")
 
 		mapFile = f"{outReactFold}angleDehyb{ri+1:0>{len_nreact_dehyb}}_map.txt"
 		with open(mapFile,'w') as f:
@@ -1376,7 +1414,7 @@ def writeReactAngle(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_cros
 			f.write("## Dehybridization\n")
 			f.write(f"{natom} equivalences\n")
 			f.write(f"{nedge} edgeIDs\n")
-			f.write(f"1 constraints\n")
+			f.write(f"{nangle} constraints\n")
 
 			f.write(f"\nInitiatorIDs\n\n")
 			f.write("2\n")
@@ -1387,7 +1425,14 @@ def writeReactAngle(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_cros
 				f.write(f"{edges_all_dehyb[ri][edgei]+1}\n")
 
 			f.write("\nConstraints\n\n")
-			f.write(f"custom \"round(rxnsum(v_var1,1)) == {angles_all_dehyb[ri][0][0]+2+1}\"\n")
+			f.write(f"custom \"round(rxnsum(v_var1,{angles_all_hyb[ri][0][4]+1})) == {angles_all_dehyb[ri][0][0]+1} || "
+							 f"round(rxnsum(v_var1,{angles_all_hyb[ri][0][4]+1})) == {angles_all_dehyb[ri][0][0]+3}\"\n")
+			if nangle >= 2:
+				f.write(f"custom \"round(rxnsum(v_var1,{angles_all_dehyb[ri][1][4]+1})) == {angles_all_dehyb[ri][1][0]+1} || "
+								 f"round(rxnsum(v_var1,{angles_all_dehyb[ri][1][4]+1})) == {angles_all_dehyb[ri][1][0]+3}\"\n")
+			if nangle >= 3:
+				f.write(f"custom \"round(rxnsum(v_var1,{angles_all_dehyb[ri][2][4]+1})) == {angles_all_dehyb[ri][2][0]+1} || "
+								 f"round(rxnsum(v_var1,{angles_all_dehyb[ri][2][4]+1})) == {angles_all_dehyb[ri][2][0]+3}\"\n")
 
 			f.write("\nEquivalences\n\n")
 			for atomi in range(natom):
@@ -1398,11 +1443,9 @@ def writeReactAngle(outSimFold, strands, backbone_bonds, comp_hyb_bonds, is_cros
 
 
 ### write table for hybridization bond
-def writeBondHyb(bondFold, bond_res, p):
+def writeBondHyb(bondFold, bond_res, r12_max, p):
 	bondFile = bondFold + "bond_hyb.txt"
-	r12_cut_bond = np.sqrt(3)*p.dbox
-	r12_cut_bond = r12_cut_bond - r12_cut_bond%bond_res + bond_res
-	npoint = int(r12_cut_bond/bond_res+1)
+	npoint = int(r12_max/bond_res+1)
 
 	### forced binding force (kcal/mol/nm)
 	F_force = 1
@@ -1413,11 +1456,11 @@ def writeBondHyb(bondFold, bond_res, p):
 		f.write("# r E(r) F(r)\n")
 		
 		for i in range(npoint):
-			r12 = i * r12_cut_bond / (npoint - 1)
+			r12 = i * r12_max / (npoint - 1)
 			if r12 < p.r12_cut_hyb:
 				U = p.U_hyb*(i*bond_res/p.r12_cut_hyb-1)
 				F = -p.U_hyb/p.r12_cut_hyb
-			elif p.force_bind:
+			elif p.forceBind:
 				U = 6.96*F_force*(i*bond_res-p.r12_cut_hyb)
 				F = -6.96*F_force
 			else:
@@ -1429,160 +1472,86 @@ def writeBondHyb(bondFold, bond_res, p):
 ################################################################################
 ### Calculation Managers
 
-### translate cadnano design to DNAfold model
-def buildDNAfoldModel(inFile, p):
-
-	### parse the json file
-	scaffold, staples, fiveP_end_scaf, fiveP_ends_stap, nnt_scaf, nnt_stap = parseJson(inFile)
-	
-	### initial calculations
-	print("Building DNAfold model...")
-	p.n_scaf = nnt_scaf // p.nnt_per_bead
-	p.n_stap = nnt_stap // p.nnt_per_bead
-	p.nbead = p.n_scaf + p.n_stap
-	print("Using " + str(p.n_scaf) + " scaffold beads and " + str(p.n_stap) + " staple beads.")
-
-	### initialze interaction and geometry arrays
-	strands =  [0 for i in range(p.nbead)]
-	vstrands = [0 for i in range(p.nbead)]
-	backbone_bonds = [[-1,-1] for i in range(p.nbead)]
-	comp_hyb_bonds = [-1 for i in range(p.nbead)]
-	is_crossover = [False for i in range(p.nbead)]
-
-	### initialize nucleotide and bead indices
-	ni_current = 0
-	bi_current = 0
-
-	### kick off nucleotide and bead indexing with 5' scaffold end
-	ni_scaffoldArr = find(fiveP_end_scaf[0], fiveP_end_scaf[1], scaffold)
-	scaffold[ni_scaffoldArr].extend([ni_current, bi_current])
-	vstrands[bi_current] = scaffold[ni_scaffoldArr][0]
-
-	### track along scaffold until 3' end eached
-	while scaffold[ni_scaffoldArr][4] != -1:
-		ni_scaffoldArr = find(scaffold[ni_scaffoldArr][4], scaffold[ni_scaffoldArr][5], scaffold)
-
-		### update nucleotide and bead indices
-		ni_current += 1
-		bi_current = ni_current // p.nnt_per_bead
-		scaffold[ni_scaffoldArr].extend([ni_current, bi_current])
-
-		### store vstrand and backbone bonds for new beads
-		if bi_current > (ni_current-1)//p.nnt_per_bead:
-			vstrands[bi_current] = scaffold[ni_scaffoldArr][0]
-			backbone_bonds[bi_current][0] = bi_current-1
-			backbone_bonds[bi_current-1][1] = bi_current
-
-	### loop over staples
-	nstap = len(fiveP_ends_stap)
-	for sti in range(nstap):
-
-		### new nucleotide and bead incides
-		ni_current += 1
-		bi_current = ni_current // p.nnt_per_bead
-
-		### pick up nucleotide and bead indexing with 5' staple end
-		ni_staplesArr = find(fiveP_ends_stap[sti][0],fiveP_ends_stap[sti][1], staples)
-		staples[ni_staplesArr].extend([ni_current, bi_current])
-		vstrands[bi_current] = staples[ni_staplesArr][0]
-		strands[bi_current] = sti+1
-
-		### identify paired beads
-		if scaffold[ni_staplesArr][2] != -1 or scaffold[ni_staplesArr][4] != -1:
-			comp_hyb_bonds[scaffold[ni_staplesArr][7]] = bi_current
-			comp_hyb_bonds[bi_current] = scaffold[ni_staplesArr][7]
-
-		### track along staple until 3' end eached
-		while staples[ni_staplesArr][4] != -1:
-			ni_staplesArr = find(staples[ni_staplesArr][4], staples[ni_staplesArr][5], staples)
-
-			### update nucleotide and bead indices
-			ni_current += 1
-			bi_current = ni_current // p.nnt_per_bead
-			staples[ni_staplesArr].extend([ni_current, bi_current])
-
-			### store vstrand, strand, and backbone bonds for new beads
-			if bi_current > (ni_current-1)//p.nnt_per_bead:
-				strands[bi_current] = sti+1
-				vstrands[bi_current] = scaffold[ni_staplesArr][0]
-				backbone_bonds[bi_current][0] = bi_current-1
-				backbone_bonds[bi_current-1][1] = bi_current
-
-				### identify paired beads
-				if scaffold[ni_staplesArr][2] != -1 or scaffold[ni_staplesArr][4] != -1:
-					comp_hyb_bonds[scaffold[ni_staplesArr][7]] = bi_current
-					comp_hyb_bonds[bi_current] = scaffold[ni_staplesArr][7]
-
-	### identify crossovers
-	for bi in range(1, p.nbead):
-		if vstrands[bi] != vstrands[bi-1]:
-			if strands[bi] == strands[bi-1]:
-				is_crossover[bi] = True
-				is_crossover[bi-1] = True
-
-	### adjustments for circular scaffold
-	if p.circular_scaf:
-		backbone_bonds[0][0] = p.n_scaf-1
-		backbone_bonds[p.n_scaf-1][1] = 0
-		if vstrands[0] != vstrands[p.n_scaf]:
-			is_crossover[0] = True
-			is_crossover[p.n_scaf] = True
-
-	### return results			
-	return strands, backbone_bonds, comp_hyb_bonds, is_crossover, p
-
-
 ### initialize positions, keeping strands together
 def initPositions(strands, p):
 	print("Initializing positions...")
-	max_resets = 10
-	max_attempts = 10
-	scaffold_buffer = 4
-	natom = p.n_scaf + p.staple_copies*(p.nbead-p.n_scaf)
-	r = np.zeros((natom,3))
-	resets = 0
-	ai = 1
-	while ai < natom:
-		attempts = 0
-		bi = ai2bi(ai, p)
+
+	### parameters
+	max_nfail_strand = 20
+	max_nfail_bead = 20
+	dbox_scaf = p.dbox*0.8
+
+	### initializations
+	nbead_placed = 1
+	nbead_locked = 0
+	nstrand_locked = 0
+	r = np.zeros((p.nbead,3))
+
+	### loop over beads
+	nfail_strand = 0
+	while nbead_placed < p.nbead:
+		rbi = nbead_placed
+		obi = rbi2obi(rbi, p)
+
+		### attempt to place bead
+		nfail_bead = 0
 		while True:
-			if strands[bi] != strands[bi-1]:
-				r_propose = ars.randPos(p.dbox)
+
+			### position linked to previous bead
+			if strands[obi] == strands[obi-1]:
+				r_propose = ars.applyPBC(r[rbi-1] + p.r12_eq*ars.unitVector(ars.boxMuller()), p.dbox)
+
+			### random position for new strand
 			else:
-				r_propose = ars.applyPBC(r[ai-1] + p.r12_eq*ars.unitVector(ars.boxMuller()), p.dbox)
-			if not ars.checkOverlap(r_propose,r[0:ai],p.sigma,p.dbox):
-				if strands[bi] != 0:
+				r_propose = ars.randPos(p.dbox)
+
+			### evaluate position, break loop if no overlap and (for scaffold) within scaffold box
+			if not ars.checkOverlap(r_propose,r[:rbi],p.sigma,p.dbox):
+				if strands[obi] > 0:
 					break
-				elif sum(abs(r_propose)>(p.dbox/2-scaffold_buffer)) == 0:
+				elif (abs(r_propose)<dbox_scaf/2).all():
 					break
-			if attempts == max_attempts:
+
+			### if loop not broken update bead fail count
+			nfail_bead += 1
+
+			### break bead loop if too much failure
+			if nfail_bead == max_nfail_bead:
 				break
-			attempts += 1
-		if attempts < max_attempts:
-			r[ai] = r_propose
-			ai += 1
+
+		### set position if all went well
+		if nfail_bead < max_nfail_bead:
+			r[rbi] = r_propose
+			nbead_placed += 1
+
+			### update locked strands if end of strand
+			if obi+1 == p.n_ori or strands[obi] < strands[obi+1]:
+
+				### debug output
+				if p.debug:
+					print(f"Placed strand {nstrand_locked} after {nfail_strand} failures.")
+
+				### updates
+				nbead_locked += strands.count(strands[obi])
+				nstrand_locked += 1
+				nfail_strand = 0
+
+		### reset strand if too much failure
 		else:
-			resets += 1
-			ai = 1
-			if resets >= max_resets:
+			nfail_strand += 1
+			nbead_placed = nbead_locked
+
+			### give up if too many strand failures
+			if nfail_strand == max_nfail_strand:
 				print("Error: could not place beads, try again with larger box.")
 				sys.exit()
+
+	### return positions
 	return r
 
 
 ################################################################################
 ### Utilify Functions
-
-### search for entry in strand/index list that matches given strand/index, return index
-def find(strand, index, list):
-	for i,item in enumerate(list):
-		if item[0] == strand and item[1] == index:
-			if item[2] == -1 and item[3] == -1 and item[4] == -1 and item[5] == -1:
-				return -1
-			return i
-	print("Error: index not found, try again.")
-	sys.exit()
-
 
 ### renumber atoms starting from 0 (tailored for hyb bonds)
 def renumberBond(atoms, bonds, edges):
@@ -1657,40 +1626,225 @@ def unzip3(zipped):
 
 
 ### return 5p and 3p neighbors for scaffold bead
-def getScafNeighbors(bi, backbone_bonds, comp_hyb_bonds):
+def getScafNeighbors(bi, backbone_neighbors, complements):
 
 	### for vast majority of cases, this is the result
-	bi_5p = backbone_bonds[bi][0]
-	bi_3p = backbone_bonds[bi][1]
+	bi_5p = backbone_neighbors[bi][0]
+	bi_3p = backbone_neighbors[bi][1]
 
 	### check for 5' side break in scaffold, adjust accordingly
 	if bi_5p == -1:
-		if comp_hyb_bonds[bi] != -1:
-			if backbone_bonds[comp_hyb_bonds[bi]][1] != -1:
-				if comp_hyb_bonds[backbone_bonds[comp_hyb_bonds[bi]][1]] != -1:
-					bi_5p = comp_hyb_bonds[backbone_bonds[comp_hyb_bonds[bi]][1]]
+		if complements[bi] != -1:
+			if backbone_neighbors[complements[bi]][1] != -1:
+				if complements[backbone_neighbors[complements[bi]][1]] != -1:
+					bi_5p = complements[backbone_neighbors[complements[bi]][1]]
 
 	### check for 3' side break in scaffold, adjust accordingly
 	if bi_3p == -1:
-		if comp_hyb_bonds[bi] != -1:
-			if backbone_bonds[comp_hyb_bonds[bi]][0] != -1:
-				if comp_hyb_bonds[backbone_bonds[comp_hyb_bonds[bi]][0]] != -1:
-					bi_3p = comp_hyb_bonds[backbone_bonds[comp_hyb_bonds[bi]][0]]
+		if complements[bi] != -1:
+			if backbone_neighbors[complements[bi]][0] != -1:
+				if complements[backbone_neighbors[complements[bi]][0]] != -1:
+					bi_3p = complements[backbone_neighbors[complements[bi]][0]]
 
 	### return result
 	return bi_5p,bi_3p
 
 
-### get bead index from atom index
-def ai2bi(ai, p):
-	if ai < p.n_scaf or p.nbead == p.n_scaf:
-		return ai
+### get origami bead index from real bead index
+def rbi2obi(rbi, p):
+	if rbi < p.n_scaf:
+		return rbi
+	elif rbi < p.nbead:
+		return (rbi-p.n_scaf)%p.n_stap + p.n_scaf
 	else:
-		ci = int((ai-p.n_scaf)/p.n_stap)
-		if ci < p.staple_copies:
-			return (ai-p.n_scaf)%p.n_stap + p.n_scaf
-		else:
-			return ai - (p.staple_copies-1)*p.n_stap
+		print("Error: origami bead index not defined for dummy atoms.")
+
+
+################################################################################
+### DNAfold
+
+### translate caDNAno design to DNAfold model
+def buildDNAfoldModel(cadFile, p):
+
+	### parse the caDNAno file
+	scaffold, staples, fiveP_end_scaf, fiveP_ends_stap, nnt_scaf, nnt_stap = parseCaDNAno(cadFile)
+	
+	### initial calculations
+	print("Building DNAfold model...")
+	p.n_scaf = nnt_scaf // p.nnt_per_bead
+	p.n_stap = nnt_stap // p.nnt_per_bead
+	p.n_ori = p.n_scaf + p.n_stap
+	p.nbead = p.n_scaf + p.n_stap*p.stap_copies
+	print("Using " + str(p.n_scaf) + " scaffold beads and " + str(p.n_stap) + " staple beads.")
+
+	### initialze interaction and geometry arrays
+	vstrands = [0 for i in range(p.n_ori)]
+	strands = [0 for i in range(p.n_ori)]
+	backbone_neighbors = [[-1,-1] for i in range(p.n_ori)]
+	complements = [-1 for i in range(p.n_ori)]
+	is_crossover = [False for i in range(p.n_ori)]
+
+	### initialize nucleotide and bead indices
+	ni_current = 0
+	bi_current = 0
+
+	### kick off nucleotide and bead indexing with 5' scaffold end
+	ni_scaffoldArr = find(fiveP_end_scaf[0], fiveP_end_scaf[1], scaffold)
+	scaffold[ni_scaffoldArr].extend([ni_current, bi_current])
+	vstrands[bi_current] = scaffold[ni_scaffoldArr][0]
+
+	### track along scaffold until 3' end eached
+	while scaffold[ni_scaffoldArr][4] != -1:
+		ni_scaffoldArr = find(scaffold[ni_scaffoldArr][4], scaffold[ni_scaffoldArr][5], scaffold)
+
+		### update nucleotide and bead indices
+		ni_current += 1
+		bi_current = ni_current // p.nnt_per_bead
+		scaffold[ni_scaffoldArr].extend([ni_current, bi_current])
+
+		### store vstrand and backbone bonds for new beads
+		if bi_current > (ni_current-1)//p.nnt_per_bead:
+			vstrands[bi_current] = scaffold[ni_scaffoldArr][0]
+			backbone_neighbors[bi_current][0] = bi_current-1
+			backbone_neighbors[bi_current-1][1] = bi_current
+
+	### loop over staples
+	nstap = len(fiveP_ends_stap)
+	for sti in range(nstap):
+
+		### new nucleotide and bead incides
+		ni_current += 1
+		bi_current = ni_current // p.nnt_per_bead
+
+		### pick up nucleotide and bead indexing with 5' staple end
+		ni_staplesArr = find(fiveP_ends_stap[sti][0],fiveP_ends_stap[sti][1], staples)
+		staples[ni_staplesArr].extend([ni_current, bi_current])
+		vstrands[bi_current] = staples[ni_staplesArr][0]
+		strands[bi_current] = sti+1
+
+		### identify paired beads
+		if scaffold[ni_staplesArr][2] != -1 or scaffold[ni_staplesArr][4] != -1:
+			complements[scaffold[ni_staplesArr][7]] = bi_current
+			complements[bi_current] = scaffold[ni_staplesArr][7]
+
+		### track along staple until 3' end eached
+		while staples[ni_staplesArr][4] != -1:
+			ni_staplesArr = find(staples[ni_staplesArr][4], staples[ni_staplesArr][5], staples)
+
+			### update nucleotide and bead indices
+			ni_current += 1
+			bi_current = ni_current // p.nnt_per_bead
+			staples[ni_staplesArr].extend([ni_current, bi_current])
+
+			### store vstrand, strand, and backbone bonds for new beads
+			if bi_current > (ni_current-1) // p.nnt_per_bead:
+				strands[bi_current] = sti+1
+				vstrands[bi_current] = scaffold[ni_staplesArr][0]
+				backbone_neighbors[bi_current][0] = bi_current-1
+				backbone_neighbors[bi_current-1][1] = bi_current
+
+				### identify paired beads
+				if scaffold[ni_staplesArr][2] != -1 or scaffold[ni_staplesArr][4] != -1:
+					complements[scaffold[ni_staplesArr][7]] = bi_current
+					complements[bi_current] = scaffold[ni_staplesArr][7]
+
+	### identify crossovers
+	for bi in range(1, p.n_ori):
+		if vstrands[bi] != vstrands[bi-1]:
+			if strands[bi] == strands[bi-1]:
+				is_crossover[bi] = True
+				is_crossover[bi-1] = True
+
+	### adjustments for circular scaffold
+	if p.circularScaf:
+		backbone_neighbors[0][0] = p.n_scaf-1
+		backbone_neighbors[p.n_scaf-1][1] = 0
+		if vstrands[0] != vstrands[p.n_scaf]:
+			is_crossover[0] = True
+			is_crossover[p.n_scaf] = True
+
+	### strand count
+	p.nstrand = max(strands)+1
+
+	### return results			
+	return strands, backbone_neighbors, complements, is_crossover, p
+
+
+### extract necessary info from caDNAno file
+def parseCaDNAno(cadFile):
+	print("Parsing caDNAno file...")
+	
+	### load caDNAno file
+	ars.testFileExist(cadFile,"caDNAno")
+	with open(cadFile, 'r') as f:
+		json_string = f.read()
+	j = json.loads(json_string)
+
+	### initialize
+	scaffold = []
+	staples = []
+	fiveP_ends_stap = []
+	
+	### loop over virtual strands
+	for el1 in j["vstrands"]:
+		
+		### loop over the elements of the virtual strand
+		for el2_key, el2 in el1.items():
+			
+			### read virtual strand index
+			if el2_key == "num":
+				vstrand_current = el2
+			
+			### read scaffold side of virtual strand
+			elif el2_key == "scaf":
+				
+				### loop over nucleotides
+				for ni_vstrand, neighbors in enumerate(el2):
+					
+					### store virtual strand index and nucleotide index for current nucleotide and its neighbors
+					scaffold_current = [vstrand_current, int(ni_vstrand)]
+					for s in neighbors:
+						scaffold_current.append(int(s))
+					scaffold.append(scaffold_current)
+					
+					### identify 5' end
+					if scaffold_current[2] == -1 and scaffold_current[4] != -1:
+						fiveP_end_scaf = scaffold_current
+			
+			### read staple side of helix
+			elif el2_key == "stap":
+				
+				### loop over nucleotides
+				for ni_vstrand, neighbors in enumerate(el2):
+					
+					### store virtual strand index and nucleotide index for current nucleotide and its neighbors
+					staple_current = [vstrand_current, int(ni_vstrand)]
+					for s in neighbors:
+						staple_current.append(int(s))
+					staples.append(staple_current)
+					
+					### identify 5' end
+					if staple_current[2] == -1 and staple_current[4] != -1:
+						fiveP_ends_stap.append(staple_current)
+			
+	### tally up the nucleotides
+	nnt_scaf = sum(1 for s in scaffold if s[2] != -1 or s[4] != -1)
+	nnt_stap = sum(1 for s in staples if s[2] != -1 or s[4] != -1)
+	
+	### report
+	print(f"Found {nnt_scaf} scaffold nucleotides and {nnt_stap} staple nucleotides.")
+	return scaffold, staples, fiveP_end_scaf, fiveP_ends_stap, nnt_scaf, nnt_stap
+
+
+### search for entry in strand/index list that matches given strand/index
+def find(strand, index, list):
+	for i,item in enumerate(list):
+		if item[0] == strand and item[1] == index:
+			if item[2] == -1 and item[3] == -1 and item[4] == -1 and item[5] == -1:
+				return -1
+			return i
+	print("Error: index not found in strand/index list.")
+	sys.exit()
 
 
 ### run the script
