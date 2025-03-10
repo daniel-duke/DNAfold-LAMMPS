@@ -109,8 +109,10 @@ def getCadFile(simID):
 	### folders with useful designs
 	if simID.startswith("4HB"):
 		cadFold = projectsFold + "elementary/cadnano/4HB/"
-	if simID.startswith("16HB"):
+	elif simID.startswith("16HB"):
 		cadFold = projectsFold + "elementary/cadnano/16HB/"
+	elif simID.startswith("32HB"):
+		cadFold = projectsFold + "elementary/cadnano/32HB/"
 	elif simID.startswith("ds_"):
 		cadFold = projectsFold + "elementary/cadnano/strands/"
 	elif simID.startswith("sheet_"):
