@@ -1,4 +1,5 @@
 import arsenal as ars
+import utils
 import multiprocessing
 from multiprocessing import Pool
 import numpy as np
@@ -26,9 +27,6 @@ import sys
 # trajectory:
   # columns - (1) atom index, (2) strand index, (3-5) scaled position
 
-## To Do
-# keep bonds for reserved staples
-
 
 ################################################################################
 ### Parameters
@@ -37,13 +35,13 @@ def main():
 
 	### input files
 	simID = "16HB"
-	simTag = "/resYes"
-	srcFold = "/Users/dduke/Files/dnafold_lmp/production/"
-	multi_sim = True
+	simTag = ""
+	srcFold = "/Users/dduke/Files/dnafold_lmp/"
+	multiSim = False
 
 	### data reading parameters
 	nstep_skip = 0  				# number of recorded initial steps to skip
-	coarse_time = 1 				# coarse factor for time steps
+	coarse_time = 10 				# coarse factor for time steps
 
 	### analysis options
 	center = 1						# what to place at center
@@ -52,17 +50,9 @@ def main():
 	bicolor = True					# whether to use only 2 colors (scaf and stap)
 	r12_cut_hyb = 2					# hybridization potential cutoff radius
 
-	### single simulation folder
-	if not multi_sim:
-		nsim = 1
-		simFolds = [ srcFold + simID + simTag + "/" ]
-
-	### multiple simulation folders
-	else:
-		copiesFold = srcFold + simID + simTag + "/"
-		copiesFile = copiesFold + "copies.txt"
-		copyNames, nsim = ars.readCopies(copiesFile)
-		simFolds = [ copiesFold + copyNames[i] + "/" for i in range(nsim) ]
+	### get simulation folders
+	simHomeFold = srcFold + simID + simTag + "/"
+	simFolds, nsim = utils.getSimFolds(simHomeFold, multiSim)
 
 	### assemble data params
 	params = []
@@ -104,7 +94,7 @@ def submain(simFold, nstep_skip, coarse_time, center, unwrap, set_color, bicolor
 	colors = np.minimum(2,strands) if bicolor else strands
 
 	### interpret complete geometry
-	bonds_backbone, complements, n_scaf, circular_scaf = processGeo(geoFile)
+	bonds_backbone, complements, n_scaf, circularScaf = processGeo(geoFile)
 
 	### write complete trajectories
 	writeAtomDump(outDatFile, dbox, points_centered, colors, set_color, dump_every)
@@ -112,7 +102,7 @@ def submain(simFold, nstep_skip, coarse_time, center, unwrap, set_color, bicolor
 
 	### write scaffold-only trajectories
 	writeAtomDump(outDatScafFile, dbox, points_centered[:,:n_scaf], colors[:n_scaf], set_color, dump_every)
-	ars.writeGeo(outGeoVisScafFile, dbox, points[0,:n_scaf], types=colors[:n_scaf], bonds=bonds_backbone[:n_scaf-1+circular_scaf])
+	ars.writeGeo(outGeoVisScafFile, dbox, points[0,:n_scaf], types=colors[:n_scaf], bonds=bonds_backbone[:n_scaf-1+circularScaf])
 
 	### hybridization analysis
 	hyb_status = calcHybridizations(points, complements, dbox, r12_cut_hyb)
@@ -120,7 +110,7 @@ def submain(simFold, nstep_skip, coarse_time, center, unwrap, set_color, bicolor
 
 	### write conectivity vars
 	with open(outConnFile,'wb') as f:
-		pickle.dump([strands, bonds_backbone, complements, n_scaf, circular_scaf], f)
+		pickle.dump([strands, bonds_backbone, complements, n_scaf, circularScaf], f)
 
 
 ################################################################################
@@ -133,14 +123,14 @@ def processGeo(geoFile):
 	### calculate complements
 	n_scaf = len(types[types==1])
 	nbead = len(types)-n_scaf
-	complements = getcomplements(charges, nbead, n_scaf)
+	complements = getComplements(charges, nbead, n_scaf)
 
 	### analyze bonds
-	circular_scaf = True if (bonds[n_scaf-1,:]==[1,n_scaf,1]).all() else False
-	bonds_backbone = bonds[bonds[:,0] == 1]
+	bonds_backbone = bonds[ (bonds[:,0]!=2) & (bonds[:,1]<=nbead) & (bonds[:,2]<=nbead) ]
+	circularScaf = True if np.sum(bonds_backbone[:,1]<=n_scaf)==n_scaf else False
 
 	### return results
-	return bonds_backbone, complements, n_scaf, circular_scaf
+	return bonds_backbone, complements, n_scaf, circularScaf
 
 
 ### write lammps-style atom dump
@@ -185,7 +175,7 @@ def writeHybStatus(outHybFile, hyb_status, dump_every):
 ### Calculation Managers
 
 ### use charges to get complimentary beads (for all beads)
-def getcomplements(charges, nbead, n_scaf):
+def getComplements(charges, nbead, n_scaf):
 	complements = [[] for i in range(nbead)]
 	for i in range(n_scaf):
 		for j in range(n_scaf,nbead):

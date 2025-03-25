@@ -1,4 +1,5 @@
 import arsenal as ars
+import utilsLocal
 import parameters
 import numpy as np
 import random
@@ -17,12 +18,9 @@ import os
   # (starting from 1) paired to the staples to reserve; the code uses reserved
   # staple files by default, but it can use reserved scaffold if neccessary.
 
-## Version Note
-# added capabilities: parameters output file, and the return of forced binding!
-
 # To Do
-# add blocking cases for angle template that arise from using multiple staple copies,
-  # input file, set unique charge for staples with no complements
+# add blocking cases for angle template that arise from using multiple staple
+  # copies, input file
 
 
 ################################################################################
@@ -37,7 +35,7 @@ def main():
 	multiSim = False
 
 	### computational parameters
-	nstep			= 1E7		# steps			- number of simulation steps
+	nstep			= 1E6		# steps			- number of simulation steps
 	nstep_relax		= 1E5		# steps			- number of steps for relaxation
 	dump_every		= 1E4		# steps			- number of steps between positions dumps
 	dt				= 0.01		# ns			- integration time step
@@ -49,8 +47,8 @@ def main():
 
 	### design parameters
 	nnt_per_bead	= 8			# nt			- nucleotides per bead (only 8)
-	circularScaf	= True		# bool			- whether the scaffold is circular
-	reserveStap		= False		# bool			- whether to reserve a subset of staples for later
+	circularScaf	= False		# bool			- whether the scaffold is circular
+	reserveStap		= True		# bool			- whether to reserve a subset of staples for later
 	stap_copies		= 1 		# int			- number of copies for each staple
 
 	### physical parameters
@@ -73,17 +71,19 @@ def main():
 								sigma, epsilon, r12_eq, k_x, r12_cut_hyb, U_hyb, dsLp)
 
 	### prepare output folder
-	outSimFold, cadFile = prepOutFold(outSrcFold, simID, simTag, multiSim, p)
+	outSimFold, outMetaFold, cadFile = prepOutFold(outSrcFold, simID, simTag, multiSim, p)
 
 	### read caDNAno file
 	strands, backbone_neighbors, complements, is_crossover, p = buildDNAfoldModel(cadFile, p)
 
 	### read and write reserved staples file
 	is_reserved_strand = readRstap(simID, p)
-	writeRstap(outSimFold, is_reserved_strand)
+	writeRstap(outMetaFold, is_reserved_strand)
+
+	### set random seed
+	random.seed(p.rseed)
 
 	### write geometry files
-	random.seed(p.rseed)
 	r, nhyb, nangle = composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossover, is_reserved_strand, p)
 	composeGeoVis(outSimFold, strands, backbone_neighbors, r, p)
 
@@ -100,40 +100,6 @@ def main():
 ################################################################################
 ### File Handlers
 
-### find the caDNAno file in my file system
-def getCadFile(simID):
-
-	### the root of all designs
-	projectsFold = "/Users/dduke/OneDrive - Duke University/DukeU/Research/Projects/"
-
-	### folders with useful designs
-	if simID.startswith("4HB"):
-		cadFold = projectsFold + "elementary/cadnano/4HB/"
-	elif simID.startswith("16HB"):
-		cadFold = projectsFold + "elementary/cadnano/16HB/"
-	elif simID.startswith("32HB"):
-		cadFold = projectsFold + "elementary/cadnano/32HB/"
-	elif simID.startswith("ds_"):
-		cadFold = projectsFold + "elementary/cadnano/strands/"
-	elif simID.startswith("sheet_"):
-		cadFold = projectsFold + "elementary/cadnano/sheets/"
-	elif simID.startswith("cube_4HB"):
-		cadFold = projectsFold + "gang_cube/full_cube/designs/4HB/"
-	elif simID.startswith("tri_edit"):
-		cadFold = projectsFold + "baigl_isotherms/sharp_triangle/"
-	elif simID.startswith("triS_edit"):
-		cadFold = projectsFold + "baigl_isotherms/sharp_triangle_small/"
-
-	### default folder
-	else:
-		cadFold = projectsFold + "elementary/cadnano/"
-
-	### return file
-	cadFile = cadFold + simID + ".json"
-	ars.testFileExist(cadFile, "caDNAno")
-	return cadFile
-
-
 ### initialize and populate output folder with basic data
 def prepOutFold(outSrcFold, simID, simTag, multiSim, p):
 
@@ -143,24 +109,31 @@ def prepOutFold(outSrcFold, simID, simTag, multiSim, p):
 		outSimFold += f"sim{p.rseed:02.0f}/"
 	ars.createSafeFold(outSimFold)
 
+	### create metadata folder
+	outMetaFold = outSrcFold + simID + simTag + "/metadata/"
+	ars.createSafeFold(outMetaFold)
+
 	### record metadata
-	p.record(outSimFold + "parameters.txt")
+	paramsFile = outMetaFold + "parameters.txt"
+	p.record(paramsFile)
 
 	### copy caDNAno file
-	cadFile = getCadFile(simID)
-	outCadFile = outSimFold + simID + ".json"
-	os.system(f"cp \"{cadFile}\" \"{outCadFile}\"")
+	cadFile = utilsLocal.getCadFile(simID)
+	outCadFile = outMetaFold + simID + ".json"
+	if os.path.isfile(cadFile):
+		os.system(f"cp \"{cadFile}\" \"{outCadFile}\"")
+
+	### copy oxDNA files
+	topFile, confFile = utilsLocal.getOxFiles(simID)
+	outTopFile = outMetaFold + simID + ".top"
+	outConfFile = outMetaFold + simID + "_ideal.dat"
+	if os.path.isfile(topFile):
+		os.system(f"cp \"{topFile}\" \"{outTopFile}\"")
+	if os.path.isfile(confFile):
+		os.system(f"cp \"{confFile}\" \"{outConfFile}\"")
 
 	### results
-	return outSimFold, cadFile
-
-
-### find the reserved scaffold file in my file system
-def getRscafFile(simID):
-	projectsFold = "/Users/dduke/OneDrive - Duke University/DukeU/Research/Projects/"
-	rscafFold = projectsFold + "dnafold_lmp/reserved_scaffold/"
-	rscafFileName = "rscaf_" + simID + ".txt"
-	return rscafFold + rscafFileName
+	return outSimFold, outMetaFold, cadFile
 
 
 ### read reserved scaffold file
@@ -172,7 +145,7 @@ def readRscaf(simID, strands, complements, p):
 		return is_reserved_strand
 
 	### read scaffold
-	rscafFile = getRscafFile(simID)
+	rscafFile = utilsLocal.getRscafFile(simID)
 	ars.testFileExist(rscafFile,"reserved scaffold")
 	with open(rscafFile, 'r') as f:
 		reserved_scaf = [ int(line.strip())-1 for line in f ]
@@ -198,14 +171,6 @@ def readRscaf(simID, strands, complements, p):
 	return is_reserved_strand
 
 
-### find the reserved staples file in my file system
-def getRstapFile(simID):
-	projectsFold = "/Users/dduke/OneDrive - Duke University/DukeU/Research/Projects/"
-	rstapFold = projectsFold + "dnafold_lmp/reserved_staples/"
-	rstapFileName = "rstap_" + simID + ".txt"
-	return rstapFold + rstapFileName
-
-
 ### read reserved staples file
 def readRstap(simID, p):
 	is_reserved_strand = [ False for i in range(p.nstrand) ]
@@ -215,7 +180,7 @@ def readRstap(simID, p):
 		return is_reserved_strand
 
 	### read staples
-	rstapFile = getRstapFile(simID)
+	rstapFile = utilsLocal.getRstapFile(simID)
 	ars.testFileExist(rstapFile,"reserved staples")
 	with open(rstapFile, 'r') as f:
 		reserved_strands = [ int(line.strip())-1 for line in f ]
@@ -227,8 +192,8 @@ def readRstap(simID, p):
 
 
 ### write reserved staples file
-def writeRstap(outSimFold, is_reserved_strand):
-	rstapFile = outSimFold + "reserved_staples.txt"
+def writeRstap(outMetaFold, is_reserved_strand):
+	rstapFile = outMetaFold + "reserved_staples.txt"
 	with open(rstapFile, 'w') as f:
 		for si in range(len(is_reserved_strand)):
 			if is_reserved_strand[si]:
@@ -1777,7 +1742,6 @@ def parseCaDNAno(cadFile):
 	print("Parsing caDNAno file...")
 	
 	### load caDNAno file
-	ars.testFileExist(cadFile,"caDNAno")
 	with open(cadFile, 'r') as f:
 		json_string = f.read()
 	j = json.loads(json_string)

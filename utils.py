@@ -11,6 +11,23 @@ import sys
 ################################################################################
 ### File Handlers
 
+### get simulation folders
+def getSimFolds(simHomeFold, multiSim):
+
+	### simgle simulation analysis
+	if not multiSim:
+		nsim = 1
+		simFolds = [ simHomeFold ]
+
+	### multiple simulation folders
+	else:
+		copyNames, nsim = ars.readCopies(simHomeFold + "copies.txt")
+		simFolds = [ simHomeFold + copyNames[i] + "/" for i in range(nsim) ]
+
+	### results
+	return simFolds, nsim
+
+
 ### read oxdna configuration
 def readOxDNA(confFile, nba_total):
 	ars.testFileExist(confFile,"configuration")
@@ -38,8 +55,64 @@ def readTop(topFile):
 	return strands, nba_total
 
 
+### read hybridization times file
+def readHybStatus(inHybFile):
+	ars.testFileExist(inHybFile,"hybridization status")
+	with open(inHybFile, 'r') as f:
+		content = f.readlines()
+
+	### extract metadata
+	nbead = 0
+	while ars.isnumber(content[nbead+1].split()[0]):
+		nbead += 1
+	nstep = int(len(content)/(nbead+1))
+	dump_every = int(content[nbead+1].split()[1])
+
+	### read data
+	hyb_status = np.zeros((nstep,nbead),dtype=int)
+	for i in range(nstep):
+		for j in range(nbead):
+			hyb_status[i,j] = int(content[i*(nbead+1)+j+1].split()[1])
+
+	### return results
+	return hyb_status, dump_every
+
+
+### gather the files necessary to calculate ideal positions
+def getIdealPositions(simID, simHomeFold, position_src):
+
+	### useing cadnano
+	if position_src == "cadnano":
+		cadFile = simHomeFold + "metadata/" + simID + ".json"
+		r = initPositionsCaDNAno(cadFile)[0]
+
+	### using oxdna configuration
+	elif position_src == "oxdna":
+		cadFile = simHomeFold + "metadata/" + simID + ".json"
+		topFile = simHomeFold + "metadata/" + simID + ".top"
+		confFile = simHomeFold + "metadata/" + simID + "_ideal.dat"
+		r = initPositionsOxDNA(cadFile, topFile, confFile)[0]
+
+	### result
+	return r
+
+
 ################################################################################
 ### Calculation Managers
+
+### get first bind times (scaled by total simulation time) from hybridization status
+def calcFirstHybTimes(hyb_status, complements, n_scaf, dump_every):
+	nstep = hyb_status.shape[0]
+	first_hyb_times = np.zeros(n_scaf)
+	for i in range(n_scaf):
+		if len(complements[i]) > 0:
+			first_hyb_times[i] = nstep*dump_every
+	for i in range(nstep):
+		for j in range(n_scaf):
+			if hyb_status[i,j] == 1:
+				first_hyb_times[j] = min([first_hyb_times[j],i*dump_every])
+	return first_hyb_times, first_hyb_times/nstep/dump_every
+
 
 ### initialize positions according to caDNAno positions
 def initPositionsCaDNAno(cadFile):
@@ -47,9 +120,8 @@ def initPositionsCaDNAno(cadFile):
 
 	### parse caDNAno file
 	strands, _, row_index, col_index, dep_index = buildDNAfoldModel(cadFile)
-	strands = [ i+1 for i in strands ]
-	n_scaf = strands.count(1)
-	n_ori = len(strands)
+	strands = np.array(strands)+1
+	n_ori = len(row_index)
 
 	### set positions
 	row_index = [i - min(row_index) for i in row_index]
@@ -64,7 +136,7 @@ def initPositionsCaDNAno(cadFile):
 		r[bi,1] = -(row_index[bi]-row_middle)*2.4
 		r[bi,2] = -(dep_index[bi]-dep_middle)*2.72
 
-	### return results
+	### results
 	return r, strands
 
 
@@ -75,9 +147,9 @@ def initPositionsOxDNA(cadFile, topFile, confFile):
 
 	### parse caDNAno file
 	strands, complements = buildDNAfoldModel(cadFile)[:2]
-	strands = [ i+1 for i in strands ]
-	complements = [ i+1 for i in complements]
-	n_scaf = strands.count(1)
+	strands = np.array(strands)+1
+	complements = np.array(complements)+1
+	n_scaf = np.sum(strands==1)
 	n_ori = len(strands)
 
 	### analyze topology
@@ -141,7 +213,7 @@ def initPositionsOxDNA(cadFile, topFile, confFile):
 	### flip such that 5p scaffold end is in upper left corner
 	r = r*np.sign(r[0])*[-1,1,1]
 
-	### return results
+	### return positions
 	return r, strands
 
 
@@ -160,13 +232,13 @@ def buildDNAfoldModel(cadFile):
 	n_scaf = nnt_scaf // nnt_per_bead
 	n_stap = nnt_stap // nnt_per_bead
 	n_ori = n_scaf + n_stap
-	print("Using " + str(n_scaf) + " scaffold beads.")
+	print("Using " + str(n_scaf) + " scaffold beads and " + str(n_stap) + " staple beads.")
 
 	### initialze interaction and geometry arrays
-	vstrands = [0 for i in range(n_ori)]
 	strands = [0 for i in range(n_ori)]
 	backbone_neighbors = [[-1,-1] for i in range(n_ori)]
 	complements = [-1 for i in range(n_ori)]
+	vstrands = [0 for i in range(n_ori)]
 	row_index = [0 for i in range(n_ori)]
 	col_index = [0 for i in range(n_ori)]
 	dep_index = [0 for i in range(n_ori)]
@@ -194,9 +266,9 @@ def buildDNAfoldModel(cadFile):
 
 		### store vstrand and backbone bonds for new beads
 		if bi_current > (ni_current-1) // nnt_per_bead:
-			vstrands[bi_current] = scaffold[ni_scaffoldArr][0]
 			backbone_neighbors[bi_current][0] = bi_current-1
 			backbone_neighbors[bi_current-1][1] = bi_current
+			vstrands[bi_current] = scaffold[ni_scaffoldArr][0]
 			row_index[bi_current] = vstrand_rows[vstrands[bi_current]]
 			col_index[bi_current] = vstrand_cols[vstrands[bi_current]]
 			dep_index[bi_current] = scaffold[ni_scaffoldArr][1] // nnt_per_bead
@@ -210,18 +282,18 @@ def buildDNAfoldModel(cadFile):
 		bi_current = ni_current // nnt_per_bead
 
 		### pick up nucleotide and bead indexing with 5' staple end
-		ni_staplesArr = find(fiveP_ends_stap[sti][0],fiveP_ends_stap[sti][1], staples)
+		ni_staplesArr = find(fiveP_ends_stap[sti][0], fiveP_ends_stap[sti][1], staples)
 		staples[ni_staplesArr].extend([ni_current, bi_current])
-		vstrands[bi_current] = staples[ni_staplesArr][0]
 		strands[bi_current] = sti+1
+		vstrands[bi_current] = staples[ni_staplesArr][0]
+		row_index[bi_current] = vstrand_rows[vstrands[bi_current]]
+		col_index[bi_current] = vstrand_cols[vstrands[bi_current]]
+		dep_index[bi_current] = int((staples[ni_staplesArr][1])/nnt_per_bead)
 
 		### identify paired beads
 		if scaffold[ni_staplesArr][2] != -1 or scaffold[ni_staplesArr][4] != -1:
 			complements[scaffold[ni_staplesArr][7]] = bi_current
 			complements[bi_current] = scaffold[ni_staplesArr][7]
-			row_index[bi_current] = row_index[scaffold[ni_staplesArr][7]]
-			col_index[bi_current] = col_index[scaffold[ni_staplesArr][7]]
-			dep_index[bi_current] = dep_index[scaffold[ni_staplesArr][7]]
 
 		### track along staple until 3' end eached
 		while staples[ni_staplesArr][4] != -1:
@@ -235,19 +307,19 @@ def buildDNAfoldModel(cadFile):
 			### store vstrand, strand, and backbone bonds for new beads
 			if bi_current > (ni_current-1) // nnt_per_bead:
 				strands[bi_current] = sti+1
-				vstrands[bi_current] = scaffold[ni_staplesArr][0]
 				backbone_neighbors[bi_current][0] = bi_current-1
 				backbone_neighbors[bi_current-1][1] = bi_current
+				vstrands[bi_current] = staples[ni_staplesArr][0]
+				row_index[bi_current] = vstrand_rows[vstrands[bi_current]]
+				col_index[bi_current] = vstrand_cols[vstrands[bi_current]]
+				dep_index[bi_current] = int((staples[ni_staplesArr][1])/nnt_per_bead)
 
 				### identify paired beads
 				if scaffold[ni_staplesArr][2] != -1 or scaffold[ni_staplesArr][4] != -1:
 					complements[scaffold[ni_staplesArr][7]] = bi_current
 					complements[bi_current] = scaffold[ni_staplesArr][7]
-					row_index[bi_current] = row_index[scaffold[ni_staplesArr][7]]
-					col_index[bi_current] = col_index[scaffold[ni_staplesArr][7]]
-					dep_index[bi_current] = dep_index[scaffold[ni_staplesArr][7]]
 
-	### return results			
+	### return results
 	return strands, complements, row_index, col_index, dep_index
 
 
@@ -338,9 +410,4 @@ def find(strand, index, list):
 			return i
 	print("Error: index not found, try again.")
 	sys.exit()
-
-
-### run the script
-if __name__ == "__main__":
-	main()
 

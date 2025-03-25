@@ -1,4 +1,6 @@
 import arsenal as ars
+import utils
+import utilsLocal
 from ovito import scene
 from ovito.io import import_file
 from ovito.modifiers import ComputePropertyModifier
@@ -7,7 +9,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pickle
 import sys
-import utils
 
 ## Description
 # this script reads either a caDNAno file or oxDNA configuration file to
@@ -22,39 +23,41 @@ def main():
 
 	### input files
 	simID = "16HB"
-	simTag = ""
-	srcFold = "/Users/dduke/Files/dnafold_lmp/"
 
 	### analysis options
 	position_src = "oxdna"		# where to get bead locations (cadnano or oxdna)
+	includeStap = True			# whether to include staples
 	reserveStap = False			# whether to remove reserved staples
 
-	### get positions (using caDNAno)
-	if position_src == "cadnano":
-		cadFile = srcFold + simID + simTag + "/" + simID + ".json"
-		r, strands = utils.initPositionsCaDNAno(cadFile)
-
-	### get positions (using oxdna configuration)
-	elif position_src == "oxdna":
-		cadFile = srcFold + simID + simTag + "/" + simID + ".json"
-		topFile = srcFold + simID + simTag + "/" + simID + ".top"
-		confFile = srcFold + simID + simTag + "/" + simID + "_ideal.dat"
-		r, strands = utils.initPositionsOxDNA(cadFile, topFile, confFile)
+	### output location
+	simTag = ""
+	srcFold = "/Users/dduke/Files/dnafold_lmp/"
 
 	### get reserved staples
 	reserved_strands = []
 	if reserveStap:
-		rstapFile = srcFold + simID + simTag + "/reserved_staples.txt"
+		rstapFile = utilsLocal.getRstapFile(simID)
 		reserved_strands = readRstap(rstapFile)
 
+	### get positions from cadnano
+	if position_src == "cadnano":
+		cadFile = utilsLocal.getCadFile(simID)
+		r, strands = utils.initPositionsCaDNAno(cadFile)
+
+	### get positions from oxdna configuration
+	elif position_src == "oxdna":
+		cadFile = utilsLocal.getCadFile(simID)
+		topFile, confFile = utilsLocal.getOxFiles(simID)
+		r, strands = utils.initPositionsOxDNA(cadFile, topFile, confFile)
+
 	### prepare the data for nice redering
-	r, bonds, dbox3 = prepGeoData(r, strands, reserved_strands)
+	r, types, bonds, dbox3 = prepGeoData(r, strands, reserved_strands, includeStap)
 
 	### write geometry
 	outFold = srcFold + simID + simTag + "/" + "analysis/"
 	outGeoFile = outFold + "geometry_ideal.in"
 	ars.createSafeFold(outFold)
-	ars.writeGeo(outGeoFile, dbox3, r, types=strands, bonds=bonds)
+	ars.writeGeo(outGeoFile, dbox3, r, types=types, bonds=bonds)
 
 	### write ovito file
 	ovitoFile = outFold + "vis_ideal.ovito"
@@ -75,16 +78,16 @@ def writeOvito(ovitoFile, outGeoFile):
 	vis_element = pipeline.source.data.cell.vis
 	vis_element.enabled = False
 
-	### add compute properties
-	pipeline.modifiers.append(ComputePropertyModifier(output_property='Radius',expressions=['(ParticleType==1)?0.6:1']))
-	pipeline.modifiers.append(ComputePropertyModifier(operate_on='bonds',output_property='Width',expressions=['(BondType==1)?1.2:2']))
-
 	### set active viewport to top perspective
 	viewport = scene.viewports.active_vp
 	viewport.type = Viewport.Type.PERSPECTIVE
 	viewport.camera_dir = (-1,0,0)
 	viewport.camera_up = (0,1,0)
 	viewport.zoom_all()
+
+	### add compute properties
+	pipeline.modifiers.append(ComputePropertyModifier(output_property='Radius',expressions=['(ParticleType==1)?0.6:1']))
+	pipeline.modifiers.append(ComputePropertyModifier(operate_on='bonds',output_property='Width',expressions=['(BondType==1)?1.2:2']))
 
 	### write ovito file
 	scene.save(ovitoFile)
@@ -108,20 +111,27 @@ def readRstap(rstapFile):
 ################################################################################
 ### Utility Functions
 
-### positions and strands to 
-def prepGeoData(r, strands, reserved_strands):
+### get geometry data ready for visualization
+def prepGeoData(r, strands, reserved_strands, includeStap):
 	n_ori = len(strands)
-	n_scaf = strands.count(1)
+	n_scaf = np.sum(strands==1)
 
-	### box diameter
-	dbox3 = [ max(abs(r[:,0]))+2.72, max(abs(r[:,1]))+2.4, max(abs(r[:,2]))+2.4 ]
-	dbox3 = [ 2*i for i in dbox3 ]
+	### remove staples
+	if not includeStap:
+		r = r[:n_scaf]
+		strands = strands[:n_scaf]
+		n_ori = n_scaf
 
-	### neutralize reserved staples
-	types = np.zeros(n_ori,dtype=int)
+	### remove reserved staples
+	r_trim = np.zeros((0,3))
+	strands_trim = np.zeros(0,dtype=int)
 	for bi in range(n_ori):
-		if strands[bi] in reserved_strands:
-			r[bi] = [0,0,0]
+		if strands[bi] not in reserved_strands:
+			r_trim = np.append(r_trim,[r[bi,:]],axis=0)
+			strands_trim = np.append(strands_trim,strands[bi])
+	r = r_trim
+	strands = strands_trim
+	n_ori = len(strands)
 
 	### get bonds
 	bonds = np.zeros((0,3),dtype=int)
@@ -129,8 +139,12 @@ def prepGeoData(r, strands, reserved_strands):
 		if strands[bi] == strands[bi+1]:
 			bonds = np.append(bonds,[[strands[bi],bi+1,bi+2]],axis=0)
 
+	### box diameter
+	dbox3 = [ max(abs(r[:,0]))+2.72, max(abs(r[:,1]))+2.4, max(abs(r[:,2]))+2.4 ]
+	dbox3 = [ 2*i for i in dbox3 ]
+
 	### return results
-	return r, bonds, dbox3
+	return r, strands, bonds, dbox3
 
 
 ### run the script

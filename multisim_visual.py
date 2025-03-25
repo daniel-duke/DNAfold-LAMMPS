@@ -11,6 +11,8 @@ import os
   # session state file that visualizes all the trajectories at once.
 # source folder must contain "copies.txt" file, which contains the names of the
   # directories containing the simulations to analyze.
+# this script will only work if "backend_basics.py" has already been run for
+  # the given simulation (requires a populated "analysis" folder).
 
 ## To Do
 # figure out a way to set the default colors for numbered atom types (either
@@ -22,28 +24,28 @@ import os
 
 def main():
 
-	### location of data
+	### input files
 	simID = "4HB"
 	simTag = ""
 	srcFold = "/Users/dduke/Files/dnafold_lmp/production/"
-
-	### input files
-	datFileName = "analysis/trajectory_centered.dat"
-	geoFileName = "analysis/geometry_vis.in"
+	datFileName = "trajectory_centered.dat"
+	geoFileName = "geometry_vis.in"
 
 	### output files
 	ovitoFile = "folding_all.ovito"
 
-	### get simulation folder names
-	copiesFold = srcFold + simID + simTag + "/"
-	copiesFile = copiesFold + "copies.txt"
-	simFoldNames, nsim = ars.readCopies(copiesFile)
-	simFolds = [ copiesFold + simFoldNames[i] + "/" for i in range(nsim) ]
+	### get simulation folders
+	simHomeFold = srcFold + simID + simTag + "/"
+	simFolds, nsim = utils.getSimFolds(simHomeFold, True)
 
 	### get base geometry
-	geoFile = simFolds[0] + geoFileName
+	geoFile = simFolds[0] + "analysis/" + geoFileName
 	pipeline = import_file(geoFile, atom_style="molecular")
 	pipeline.add_to_scene()
+
+	### disable simulation cell
+	vis_element = pipeline.source.data.cell.vis
+	vis_element.enabled = False
 
 	### adjust defaults
 	particle_vis = pipeline.source.data.particles.vis
@@ -51,28 +53,25 @@ def main():
 	bonds_vis = pipeline.source.data.particles.bonds.vis
 	bonds_vis.width = 2.4
 
-	### disable simulation cell
-	vis_element = pipeline.source.data.cell.vis
-	vis_element.enabled = False
-
 	### set active viewport to top perspective
 	viewport = scene.viewports.active_vp
 	viewport.type = Viewport.Type.PERSPECTIVE
-	viewport.camera_dir = (0,0,-1) #top
+	viewport.camera_dir = (-1,0,0)
+	viewport.camera_up = (0,1,0)
 	viewport.zoom_all()
 
 	### loop over simulations
 	for i in range(nsim):
 
 		### add trajectories to pipeline
-		datFile = simFolds[i] + datFileName
+		datFile = simFolds[i] + "analysis/" + datFileName
 		traj_pipeline = import_file(datFile, multiple_frames=True)
 		traj_mod = LoadTrajectoryModifier()
 		traj_mod.source.load(datFile)
 		pipeline.modifiers.append(traj_mod)
 
 	### write ovito file
-	ovitoFile = copiesFold + ovitoFile
+	ovitoFile = simHomeFold + "analysis/" + ovitoFile
 	scene.save(ovitoFile)
 
 

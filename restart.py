@@ -19,22 +19,20 @@ def main():
 	### input files
 	simID = "16HB"
 	simTag = ""
-	stapFileName = "reserved_staples.txt"
 	srcFold = "/Users/dduke/Files/dnafold_lmp/"
 	multiSim = False
 
 	### parameters
-	nstep = 1E7				# number of simulation steps
-	addStap = False			# whether to add reserved staples
+	nstep = 1E6				# number of simulation steps
+	addStap = True			# whether to add reserved staples
 	r12_eq = 2.72			# equilibrium bead separation
 	sigma = 2.14			# bead Van der Waals radius
 	rseed = 1				# random seed
 
-	### synthesize file names
+	### find simulation folder
 	simFold  = srcFold + simID + simTag + "/"
 	if multiSim:
 		simFold += f"sim{rseed:02.0f}/"
-	stapFile = simFold + stapFileName
 
 	### add reserved staples
 	if addStap:
@@ -47,6 +45,7 @@ def main():
 
 		### add reserved staples
 		random.seed(rseed)
+		stapFile = simFold + "metadata/reserved_staples.txt"
 		is_reserved_strand = readRstap(stapFile, nstrand)
 		points, types = addReservedStap(points, strands, types, is_reserved_strand, r12_eq, sigma, dbox3[0])
 		bonds = updateBondTypes(bonds, types)
