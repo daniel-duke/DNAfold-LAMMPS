@@ -136,41 +136,6 @@ def prepOutFold(outSrcFold, simID, simTag, multiSim, p):
 	return outSimFold, outMetaFold, cadFile
 
 
-### read reserved scaffold file
-def readRscaf(simID, strands, complements, p):
-	is_reserved_strand = [ False for i in range(p.nstrand) ]
-
-	### skip if not reserving staples
-	if not p.reserveStap:
-		return is_reserved_strand
-
-	### read scaffold
-	rscafFile = utilsLocal.getRscafFile(simID)
-	ars.testFileExist(rscafFile,"reserved scaffold")
-	with open(rscafFile, 'r') as f:
-		reserved_scaf = [ int(line.strip())-1 for line in f ]
-
-	### get staples
-	n_reserved = len(reserved_scaf)
-	reserved_stap = [ 0 for i in range(n_reserved) ]
-	for bi in range(n_reserved):
-		reserved_stap[bi] = complements[reserved_scaf[bi]]
-		if reserved_stap[bi] == -1:
-			print("Error: reserved scaffold bead has no compliment.")
-			sys.exit()
-
-	### make no strands are partially reserved
-	for bi in range(n_reserved):
-		is_reserved_strand[strands[reserved_stap[bi]]] = True
-	for bi in range(p.n_scaf,p.n_ori):
-		if is_reserved_strand[strands[bi]] and bi not in reserved_stap:
-			print("Error: staple partially reserved, check accuracy of reserved scaffold file.")
-			sys.exit()
-
-	### return strand reservation status
-	return is_reserved_strand
-
-
 ### read reserved staples file
 def readRstap(simID, p):
 	is_reserved_strand = [ False for i in range(p.nstrand) ]

@@ -42,14 +42,6 @@ def getOxFiles(simID):
 	return topFile, confFile
 
 
-### find the reserved scaffold file in my file system
-def getRscafFile(simID):
-	projectsFold = "/Users/dduke/OneDrive - Duke University/DukeU/Research/Projects/"
-	rscafFold = projectsFold + "dnafold_lmp/reserved_scaffold/"
-	rscafFile = rscafFold + "rscaf_" + simID + ".txt"
-	return rscafFile
-
-
 ### find the reserved staples file in my file system
 def getRstapFile(simID):
 	projectsFold = "/Users/dduke/OneDrive - Duke University/DukeU/Research/Projects/"
