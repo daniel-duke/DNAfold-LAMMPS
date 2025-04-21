@@ -24,7 +24,7 @@ import sys
 def main():
 
 	### where to get files
-	useMyFiles = True
+	useMyFiles = False
 
 	### extract files from local system
 	if useMyFiles:
