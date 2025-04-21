@@ -1,4 +1,4 @@
-import arsenal as ars
+import armament as ars
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.special import gammaln
@@ -534,6 +534,19 @@ def calcCOM(r, dbox):
 	return com
 
 
+### calculate optimum number of histogram bins
+def optbins(A, maxM):
+	N = len(A)
+	logp = np.zeros(maxM)
+	for M in range(1, maxM+1):
+		n = np.histogram(A,bins=M)[0]
+		part1 = N*np.log(M) + gammaln(M/2) - gammaln(N+M/2)
+		part2 = -M*gammaln(1/2) + np.sum(gammaln(n+1/2))
+		logp[M-1] = part1 + part2
+	optM = np.argmax(logp) + 1
+	return optM
+
+
 ### calculate sem assuming independent measurements
 def calcSEM(A):
 	return np.std(A) / np.sqrt(len(A))
@@ -680,18 +693,5 @@ def isarray(x):
 		return True
 	else:
 		return False
-
-
-### calculate optimum number of histogram bins
-def optbins(A, maxM):
-	N = len(A)
-	logp = np.zeros(maxM)
-	for M in range(1, maxM+1):
-		n = np.histogram(A,bins=M)[0]
-		part1 = N*np.log(M) + gammaln(M/2) - gammaln(N+M/2)
-		part2 = -M*gammaln(1/2) + np.sum(gammaln(n+1/2))
-		logp[M-1] = part1 + part2
-	optM = np.argmax(logp) + 1
-	return optM
 
 
