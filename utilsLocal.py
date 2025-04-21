@@ -3,18 +3,23 @@ import sys
 import os
 
 ## Description
-# this script contains functions that find files on my local computer
+# this script contains functions that find DNAfold files on my local computer
 
 
 ################################################################################
 ### File Handlers
 
+### return standard simulation location
+def getSimHomeFold(desID, simTag="", sim_type="experiment"):
+	return "/Users/dduke/Files/dnafold_lmp/" + sim_type + "/" + desID + simTag + "/"
+
+
 ### find the caDNAno file in my file system
-def getCadFile(simID):
+def getCadFile(desID):
 
 	### the root of all designs
-	projectsFold = "/Users/dduke/OneDrive - Duke University/DukeU/Research/Projects/"
-	cadFileName = simID + ".json"
+	projectsFold = "/Users/dduke/Links/Projects/"
+	cadFileName = desID + ".json"
 
 	### search dnafold_lmp caDNAno folder
 	cadFold = projectsFold + "dnafold_lmp/cadnano/"
@@ -34,18 +39,18 @@ def getCadFile(simID):
 
 
 ### find oxDNA geometry files, 
-def getOxFiles(simID):
-	projectsFold = "/Users/dduke/OneDrive - Duke University/DukeU/Research/Projects/"
+def getOxFiles(desID, confTag):
+	projectsFold = "/Users/dduke/Links/Projects/"
 	oxFold = projectsFold + "dnafold_lmp/oxDNA_geometries/"
-	topFile = oxFold + simID + ".top"
-	confFile = oxFold + simID + "_ideal.dat"
+	topFile = oxFold + desID + ".top"
+	confFile = oxFold + desID + confTag + ".dat"
 	return topFile, confFile
 
 
 ### find the reserved staples file in my file system
-def getRstapFile(simID):
-	projectsFold = "/Users/dduke/OneDrive - Duke University/DukeU/Research/Projects/"
+def getRstapFile(desID, rstapTag):
+	projectsFold = "/Users/dduke/Links/Projects/"
 	rstapFold = projectsFold + "dnafold_lmp/reserved_staples/"
-	rstapFile = rstapFold + "rstap_" + simID + ".txt"
+	rstapFile = rstapFold + "rstap_" + desID + rstapTag + ".txt"
 	return rstapFile
 

@@ -3,8 +3,10 @@ import utils
 import utilsLocal
 from ovito import scene
 from ovito.io import import_file
-from ovito.modifiers import ComputePropertyModifier
 from ovito.vis import Viewport, SimulationCellVis
+from ovito.modifiers import ComputePropertyModifier
+from ovito.modifiers import DeleteSelectedModifier
+import argparse
 import matplotlib.pyplot as plt
 import numpy as np
 import pickle
@@ -21,46 +23,88 @@ import sys
 
 def main():
 
-	### input files
-	simID = "16HB"
+	### where to get files
+	useMyFiles = False
 
-	### analysis options
-	position_src = "oxdna"		# where to get bead locations (cadnano or oxdna)
-	includeStap = True			# whether to include staples
-	reserveStap = False			# whether to remove reserved staples
+	### extract files from local system
+	if useMyFiles:
 
-	### output location
-	simTag = ""
-	srcFold = "/Users/dduke/Files/dnafold_lmp/"
+		### chose design
+		desID = "16HB2x2x2"
+
+		### analysis options
+		position_src = "oxdna"	  	# what type of files to use for bead positions (cadnano, oxdna)
+		confTag = "_ideal"			# if using oxdna position, tag for configuration file
+		reserveStap = True			# whether to reserve staples
+		rstapTag = "_des16"			# if reserving staples, tag for reserved staples file
+		circularScaf = True			# whether to add bond between scaffold ends
+
+		### get input files
+		cadFile = utilsLocal.getCadFile(desID)
+		if position_src == "oxdna":
+			topFile, confFile = utilsLocal.getOxFiles(desID, confTag)
+		rstapFile = utilsLocal.getRstapFile(desID, rstapTag) if reserveStap else None
+
+		### set output folder
+		outFold = utilsLocal.getSimHomeFold(desID)
+
+	### use files in current folder
+	if not useMyFiles:
+
+		### get arguments
+		parser = argparse.ArgumentParser()
+		parser.add_argument('--cadFile',		type=str,	required=True,		help='name of caDNAno file')
+		parser.add_argument('--topFile',		type=str, 	default=None,		help='if using oxdna positions, name of topology file')
+		parser.add_argument('--confFile',		type=str, 	default=None,		help='if using oxdna positions, name of conformation file')
+		parser.add_argument('--rstapFile',		type=str, 	default=None,		help='if reserving staples, name of reserved staples file')
+		parser.add_argument('--circularScaf',	type=bool,	default=True,		help='whether to add bond between scaffold ends (boolean)')
+
+		### set arguments
+		args = parser.parse_args()
+		cadFile = args.cadFile
+		topFile = args.topFile
+		confFile = args.confFile
+		rstapFile = args.rstapFile
+		circularScaf = args.circularScaf
+
+		### check input
+		if topFile is not None and confFile is not None:
+			position_src = "oxdna"
+		else:
+			position_src = "cadnano"
+			if topFile is not None:
+				print("Flag: oxDNA topology file provided without configuration file, using caDNAno positions.")
+			if confFile is not None:
+				print("Flag: oxDNA configuration file provided without topology file, using caDNAno positions.")
+
+		### set output folder
+		outFold = "./"
+
+
+################################################################################
+### Heart
 
 	### get reserved staples
 	reserved_strands = []
-	if reserveStap:
-		rstapFile = utilsLocal.getRstapFile(simID)
+	if rstapFile is not None:
 		reserved_strands = readRstap(rstapFile)
 
-	### get positions from cadnano
+	### get positions
 	if position_src == "cadnano":
-		cadFile = utilsLocal.getCadFile(simID)
 		r, strands = utils.initPositionsCaDNAno(cadFile)
-
-	### get positions from oxdna configuration
-	elif position_src == "oxdna":
-		cadFile = utilsLocal.getCadFile(simID)
-		topFile, confFile = utilsLocal.getOxFiles(simID)
+	if position_src == "oxdna":
 		r, strands = utils.initPositionsOxDNA(cadFile, topFile, confFile)
 
 	### prepare the data for nice redering
-	r, types, bonds, dbox3 = prepGeoData(r, strands, reserved_strands, includeStap)
+	types, bonds, dbox3 = prepGeoData(r, strands, reserved_strands, circularScaf)
 
 	### write geometry
-	outFold = srcFold + simID + simTag + "/" + "analysis/"
-	outGeoFile = outFold + "geometry_ideal.in"
-	ars.createSafeFold(outFold)
+	ars.createSafeFold(outFold + "analysis")
+	outGeoFile = outFold + "analysis/geometry_ideal.in"
 	ars.writeGeo(outGeoFile, dbox3, r, types=types, bonds=bonds)
 
 	### write ovito file
-	ovitoFile = outFold + "vis_ideal.ovito"
+	ovitoFile = outFold + "analysis/vis_ideal.ovito"
 	writeOvito(ovitoFile, outGeoFile)
 
 
@@ -70,27 +114,32 @@ def main():
 ### write session state vito file that visualizes the geometry
 def writeOvito(ovitoFile, outGeoFile):
 
+	### set colors
+	scaf_color = ars.getColor("orchid")
+	stap_color = ars.getColor("silver")
+
 	### get base geometry
 	pipeline = import_file(outGeoFile, atom_style="molecular")
 	pipeline.add_to_scene()
 
-	### disable simulation cell
-	vis_element = pipeline.source.data.cell.vis
-	vis_element.enabled = False
+	### prepare basic DNAfold scene
+	pipeline = utils.setOvitoBasics(pipeline)
 
-	### set active viewport to top perspective
-	viewport = scene.viewports.active_vp
-	viewport.type = Viewport.Type.PERSPECTIVE
-	viewport.camera_dir = (-1,0,0)
-	viewport.camera_up = (0,1,0)
-	viewport.zoom_all()
-
-	### add compute properties
+	### set scaffold and staple particle radii and bond widths
 	pipeline.modifiers.append(ComputePropertyModifier(output_property='Radius',expressions=['(ParticleType==1)?0.6:1']))
 	pipeline.modifiers.append(ComputePropertyModifier(operate_on='bonds',output_property='Width',expressions=['(BondType==1)?1.2:2']))
 
+	### set colors
+	pipeline.modifiers.append(ComputePropertyModifier(output_property='Color',expressions=[f'(ParticleType==1)?{scaf_color[0]}/255:{stap_color[0]}/255',f'(ParticleType==1)?{scaf_color[1]}/255:{stap_color[1]}/255',f'(ParticleType==1)?{scaf_color[2]}/255:{stap_color[2]}/255']))
+
+	### remove reserved staples, or all staples
+	pipeline.modifiers.append(ComputePropertyModifier(enabled=False,output_property='Selection',expressions=['ParticleType==3']))
+	pipeline.modifiers.append(ComputePropertyModifier(enabled=False,output_property='Selection',expressions=['ParticleType!=1']))
+	pipeline.modifiers.append(DeleteSelectedModifier())
+
 	### write ovito file
 	scene.save(ovitoFile)
+	pipeline.remove_from_scene()
 
 
 ################################################################################
@@ -112,26 +161,17 @@ def readRstap(rstapFile):
 ### Utility Functions
 
 ### get geometry data ready for visualization
-def prepGeoData(r, strands, reserved_strands, includeStap):
+def prepGeoData(r, strands, reserved_strands, circularScaf):
 	n_ori = len(strands)
 	n_scaf = np.sum(strands==1)
 
-	### remove staples
-	if not includeStap:
-		r = r[:n_scaf]
-		strands = strands[:n_scaf]
-		n_ori = n_scaf
-
-	### remove reserved staples
-	r_trim = np.zeros((0,3))
-	strands_trim = np.zeros(0,dtype=int)
-	for bi in range(n_ori):
-		if strands[bi] not in reserved_strands:
-			r_trim = np.append(r_trim,[r[bi,:]],axis=0)
-			strands_trim = np.append(strands_trim,strands[bi])
-	r = r_trim
-	strands = strands_trim
-	n_ori = len(strands)
+	### types
+	types = np.ones(n_ori)
+	for bi in range(n_scaf,n_ori):
+		if strands[bi] in reserved_strands:
+			types[bi] = 3
+		else:
+			types[bi] = 2
 
 	### get bonds
 	bonds = np.zeros((0,3),dtype=int)
@@ -139,12 +179,16 @@ def prepGeoData(r, strands, reserved_strands, includeStap):
 		if strands[bi] == strands[bi+1]:
 			bonds = np.append(bonds,[[strands[bi],bi+1,bi+2]],axis=0)
 
+	### add scaffold ends bond
+	if circularScaf:
+		bonds = np.append(bonds, [[1,1,n_scaf]], axis=0)
+
 	### box diameter
 	dbox3 = [ max(abs(r[:,0]))+2.72, max(abs(r[:,1]))+2.4, max(abs(r[:,2]))+2.4 ]
 	dbox3 = [ 2*i for i in dbox3 ]
 
 	### return results
-	return r, strands, bonds, dbox3
+	return types, bonds, dbox3
 
 
 ### run the script

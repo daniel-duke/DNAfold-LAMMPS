@@ -11,7 +11,7 @@ def readAtomDump(datFile,nstep_skip=0,coarse_time=1,bdis="all",coarse_points=1):
 
 	### notes
 	# assumes the bdis array stores the atom indices starting from 1.
-	# assumes the timestep of the second step is the dump frequency.
+	# assumes the time step of the second step is the dump frequency.
 	# assumes the box diameter does not change.
 
 	### load trajectory file
@@ -87,7 +87,7 @@ def readAtomDump(datFile,nstep_skip=0,coarse_time=1,bdis="all",coarse_points=1):
 def getDumpEvery(datFile):
 
 	### notes
-	# assumes the timestep of the second step is the dump frequency.
+	# assumes the time step of the second step is the dump frequency.
 
 	### load trajectory file
 	ars.testFileExist(datFile,"trajectory")

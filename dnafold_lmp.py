@@ -1,5 +1,6 @@
 import arsenal as ars
 import utilsLocal
+import argparse
 import parameters
 import numpy as np
 import random
@@ -20,7 +21,8 @@ import os
 
 # To Do
 # add blocking cases for angle template that arise from using multiple staple
-  # copies, input file
+  # copies, input file, parameterize 90 degree angular potential, reactions that
+  # shorten crossover bond length
 
 
 ################################################################################
@@ -28,60 +30,86 @@ import os
 
 def main():
 
-	### simulation ID
-	simID = "16HB"
-	simTag = ""
-	outSrcFold = "/Users/dduke/Files/dnafold_lmp/"
-	multiSim = False
+	### where to get files
+	useMyFiles = False
 
-	### computational parameters
-	nstep			= 1E6		# steps			- number of simulation steps
-	nstep_relax		= 1E5		# steps			- number of steps for relaxation
-	dump_every		= 1E4		# steps			- number of steps between positions dumps
-	dt				= 0.01		# ns			- integration time step
-	dbox			= 60		# nm			- periodic boundary diameter
-	forceBind		= False		# bool			- whether to force hybridization (not applied if >1 staple copies)
-	dehyb			= True		# bool			- whether to include dehybridization reactions (unnecessary for 1 staple copy)
-	debug			= False		# bool			- whether to include debugging output
-	rseed			= 1			# int			- random seed
+	### extract files from my mac
+	if useMyFiles:
 
-	### design parameters
-	nnt_per_bead	= 8			# nt			- nucleotides per bead (only 8)
-	circularScaf	= False		# bool			- whether the scaffold is circular
-	reserveStap		= True		# bool			- whether to reserve a subset of staples for later
-	stap_copies		= 1 		# int			- number of copies for each staple
+		### chose design
+		desID = "16HB2x2x4"
+		simTag = "/control"
+		simType = "production"
+		rstapTag = None
+		rseed = 1
 
-	### physical parameters
-	T				= 300		# K				- temperature
-	r_h_bead		= 1.28		# nm			- hydrodynamic radius of single bead
-	visc			= 0.8472	# mPa/s			- viscosity (units equivalent to pN*ns/mn^2)
+		### computational parameters
+		nstep			= 2E8		# steps			- number of simulation steps
+		nstep_relax		= 1E5		# steps			- number of steps for relaxation
+		dump_every		= 1E4		# steps			- number of steps between positions dumps
+		dbox			= 100		# nm			- periodic boundary diameter
 
-	### interaction parameters
-	sigma			= 2.14		# nm			- bead Van der Waals radius
-	epsilon			= 4			# kcal/mol		- WCA energy parameter
-	r12_eq			= 2.72		# nm			- equilibrium bead separation
-	k_x				= 120		# kcal/mol/nm2	- backbone spring constant (standard definition)
-	r12_cut_hyb		= 2			# nm			- hybridization potential cutoff radius
-	U_hyb			= 10		# kcal/mol		- depth of hybridization potential
-	dsLp			= 50		# nm			- persistence length of dsDNA
+		### design parameters
+		circularScaf	= True		# bool			- whether the scaffold is circular
+		stap_copies		= 1 		# int			- number of copies for each staples
 
-	### create parameters class
-	p = parameters.parameters(	nstep, nstep_relax, dump_every, dt, dbox, forceBind, dehyb, debug, rseed,
-								nnt_per_bead, circularScaf, reserveStap, stap_copies, T, r_h_bead, visc, 
-								sigma, epsilon, r12_eq, k_x, r12_cut_hyb, U_hyb, dsLp)
+		### get input files
+		cadFile = utilsLocal.getCadFile(desID)
+		rstapFile = utilsLocal.getRstapFile(desID, rstapTag) if rstapTag is not None else None
 
-	### prepare output folder
-	outSimFold, outMetaFold, cadFile = prepOutFold(outSrcFold, simID, simTag, multiSim, p)
+		### set parameters
+		cadFile, rstapFile, p = readInput(None, rseed, cadFile, rstapFile, nstep, nstep_relax, dump_every, dbox, circularScaf, stap_copies)
+		
+		### set output folder
+		outFold = utilsLocal.getSimHomeFold(desID, simTag, simType)
+
+		### copy input files to output folder
+		ars.createSafeFold(outFold)
+		outCadFile = outFold + desID + ".json"
+		os.system(f"cp \"{cadFile}\" \"{outCadFile}\"")
+		if p.reserveStap:
+			outRstapFile = outFold + "rstap_" + desID + rstapTag + ".txt"
+			os.system(f"cp \"{rstapFile}\" \"{outRstapFile}\"")
+
+	### use files in current folder
+	if not useMyFiles:
+
+		### get arguments
+		parser = argparse.ArgumentParser()
+		parser.add_argument('--inFile',	type=str,	required=True,	help='name of input file')
+		parser.add_argument('--rseed',	type=int,	default=1,		help='random seed (also used to name output folder)')
+		
+		### set arguments
+		args = parser.parse_args()
+		inFile = args.inFile
+		rseed = args.rseed
+
+		### set parameters
+		cadFile, rstapFile, p = readInput(inFile, rseed)
+
+		### set output folder
+		outFold = "./"
+
+	### record parameters
+	paramsFile = outFold + "parameters.txt"
+	p.record(paramsFile)
+
+
+################################################################################
+### Heart
+
+	### set random seed
+	random.seed(p.rseed)
 
 	### read caDNAno file
 	strands, backbone_neighbors, complements, is_crossover, p = buildDNAfoldModel(cadFile, p)
 
 	### read and write reserved staples file
-	is_reserved_strand = readRstap(simID, p)
-	writeRstap(outMetaFold, is_reserved_strand)
+	is_reserved_strand = readRstap(rstapFile, p)
 
-	### set random seed
-	random.seed(p.rseed)
+	### create simulation folder
+	outSimFold = outFold + f"sim{p.rseed:02.0f}/"
+	ars.createSafeFold(outSimFold)
 
 	### write geometry files
 	r, nhyb, nangle = composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossover, is_reserved_strand, p)
@@ -100,44 +128,138 @@ def main():
 ################################################################################
 ### File Handlers
 
-### initialize and populate output folder with basic data
-def prepOutFold(outSrcFold, simID, simTag, multiSim, p):
+### read input file
+def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, nstep=None, nstep_relax=1E5, dump_every=1E4, dbox=100, circularScaf=True, stap_copies=1):
 
-	### create simulation folder
-	outSimFold = outSrcFold + simID + simTag + "/"
-	if multiSim:
-		outSimFold += f"sim{p.rseed:02.0f}/"
-	ars.createSafeFold(outSimFold)
+	### list keys that can have 'None' as their final value
+	allow_none_default = {'rstapFile'}
 
-	### create metadata folder
-	outMetaFold = outSrcFold + simID + simTag + "/metadata/"
-	ars.createSafeFold(outMetaFold)
+	### define parameters with their default values
+	param_defaults = {
+		# Files
+		'cadFile':		cadFile,		# str			- name of caDNAno file (required)
+		'rstapFile':	rstapFile,		# str			- name of reserved staples file (required)
 
-	### record metadata
-	paramsFile = outMetaFold + "parameters.txt"
-	p.record(paramsFile)
+		# Computational parameters
+		'nstep': 		nstep,			# steps			- number of simulation steps (required)
+		'nstep_relax': 	nstep_relax,	# steps			- number of steps for relaxation
+		'dump_every': 	dump_every,		# steps			- number of steps between positions dumps
+		'dt': 			0.01,			# ns			- integration time step
+		'dbox': 		dbox,			# nm			- periodic boundary diameter
+		'forceBind': 	False,			# bool			- whether to force hybridization (not applied if >1 staple copies)
+		'dehyb': 		True,			# bool			- whether to include dehybridization reactions (unnecessary for 1 staple copy)
+		'debug': 		False,			# bool			- whether to include debugging output
 
-	### copy caDNAno file
-	cadFile = utilsLocal.getCadFile(simID)
-	outCadFile = outMetaFold + simID + ".json"
-	if os.path.isfile(cadFile):
-		os.system(f"cp \"{cadFile}\" \"{outCadFile}\"")
+		# Design parameters
+		'nnt_per_bead':	8,				# nt			- nucleotides per bead (only 8)
+		'circularScaf':	circularScaf,	# bool			- whether the scaffold is circular
+		'stap_copies': 	stap_copies,	# int			- number of copies for each staples
 
-	### copy oxDNA files
-	topFile, confFile = utilsLocal.getOxFiles(simID)
-	outTopFile = outMetaFold + simID + ".top"
-	outConfFile = outMetaFold + simID + "_ideal.dat"
-	if os.path.isfile(topFile):
-		os.system(f"cp \"{topFile}\" \"{outTopFile}\"")
-	if os.path.isfile(confFile):
-		os.system(f"cp \"{confFile}\" \"{outConfFile}\"")
+		# Physical parameters
+		'T':			300,			# K				- temperature
+		'r_h_bead':		1.28,			# nm			- hydrodynamic radius of single bead
+		'visc':			0.8472,			# mPa/s			- viscosity (units equivalent to pN*ns/mn^2)
 
-	### results
-	return outSimFold, outMetaFold, cadFile
+		# Interaction parameters
+		'sigma':		2.14,			# nm			- bead Van der Waals radius
+		'epsilon':		4.0,			# kcal/mol		- WCA energy parameter
+		'r12_eq':		2.72,			# nm			- equilibrium bead separation
+		'k_x': 			120.0,			# kcal/mol/nm2	- backbone spring constant (standard definition)
+		'r12_cut_hyb':	2.0,			# nm			- hybridization potential cutoff radius
+		'U_hyb':		10.0,			# kcal/mol		- depth of hybridization potential
+		'dsLp': 		50.0			# nm			- persistence length of dsDNA
+	}
+
+	### define types for each parameter
+	param_types = {
+		# Files
+		'cadFile':		str,
+		'rstapFile':	str,
+
+		# Computational parameters
+		'nstep':		lambda x: int(float(x)),
+		'nstep_relax':	lambda x: int(float(x)),
+		'dump_every':	lambda x: int(float(x)),
+		'dt':			float,
+		'dbox':			float,
+		'forceBind':	lambda x: x.lower() == 'true',
+		'dehyb':		lambda x: x.lower() == 'true',
+		'debug':		lambda x: x.lower() == 'true',
+
+		# Design parameters
+		'nnt_per_bead':	int,
+		'circularScaf':	lambda x: x.lower() == 'true',
+		'stap_copies':	int,
+
+		# Physical parameters
+		'T':			float,
+		'r_h_bead':		float,
+		'visc':			float,
+
+		# Interaction parameters
+		'sigma':		float,
+		'epsilon':		float,
+		'r12_eq':		float,
+		'k_x':			float,
+		'r12_cut_hyb':	float,
+		'U_hyb':		float,
+		'dsLp':			float
+	}
+
+	### store parsed parameters
+	params = {}
+
+	### read parameters from file
+	if inFile is not None:
+		ars.testFileExist(inFile,'input')
+		with open(inFile, 'r') as f:
+			for line in f:
+				line = line.strip()
+				if not line or line.startswith('#'):
+					continue
+				if '=' not in line:
+					print(f"Error: Invalid line in config file: {line}")
+					sys.exit()
+				key, value = map(str.strip, line.split('=', 1))
+				if key not in param_defaults:
+					print(f"Unknown parameter: {key}")
+					sys.exit()
+				try:
+					params[key] = param_types[key](value)
+				except:
+					print(f"Error parsing value for '{key}': {value}")
+					sys.exit()
+
+	### apply defaults and check for required values
+	for key, default in param_defaults.items():
+		if key not in params:
+			if default is None:
+				if key not in allow_none_default:
+					print(f"Missing required parameter: {key}")
+					sys.exit()
+			params[key] = default
+
+	### get caDNAno file
+	cadFile = params['cadFile']
+	del params['cadFile']
+
+	### get reserved staples file
+	rstapFile = params['rstapFile']
+	del params['rstapFile']
+	params['reserveStap'] = True
+	if rstapFile is None:
+		params['reserveStap'] = False
+
+	### add random seed to parameters
+	params['rseed'] = rseed
+
+	### convert into parameters class and return
+	p = parameters.parameters(params)
+	return cadFile, rstapFile, p
 
 
 ### read reserved staples file
-def readRstap(simID, p):
+def readRstap(rstapFile, p):
 	is_reserved_strand = [ False for i in range(p.nstrand) ]
 
 	### skip if not reserving staples
@@ -145,7 +267,6 @@ def readRstap(simID, p):
 		return is_reserved_strand
 
 	### read staples
-	rstapFile = utilsLocal.getRstapFile(simID)
 	ars.testFileExist(rstapFile,"reserved staples")
 	with open(rstapFile, 'r') as f:
 		reserved_strands = [ int(line.strip())-1 for line in f ]
@@ -154,15 +275,6 @@ def readRstap(simID, p):
 
 	### return strand reservations status
 	return is_reserved_strand
-
-
-### write reserved staples file
-def writeRstap(outMetaFold, is_reserved_strand):
-	rstapFile = outMetaFold + "reserved_staples.txt"
-	with open(rstapFile, 'w') as f:
-		for si in range(len(is_reserved_strand)):
-			if is_reserved_strand[si]:
-				f.write(f"{si+1}\n")
 
 
 ### write lammps geometry file, for simulation
@@ -174,8 +286,8 @@ def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossove
 	r = np.append(r,np.zeros((p.n_scaf,3)),axis=0)
 
 	### initialize
-	molecules = np.zeros(p.nbead+p.n_scaf,dtype=int)
-	types = np.zeros(p.nbead+p.n_scaf,dtype=int)
+	molecules = np.ones(p.nbead+p.n_scaf,dtype=int)
+	types = np.ones(p.nbead+p.n_scaf,dtype=int)
 	charges = np.zeros(p.nbead+p.n_scaf)
 	bonds = np.zeros((0,3),dtype=int)
 	angles = np.zeros((0,4),dtype=int)
@@ -183,8 +295,6 @@ def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossove
 	### scaffold atoms
 	charge_step = 1/(10**len(str(p.n_scaf)))
 	for bi in range(p.n_scaf):
-		molecules[bi] = strands[bi] + 1
-		types[bi] = min([1,strands[bi]]) + 1
 		charges[bi] = charge_step*(bi+1)
 
 	### staple atoms
@@ -192,7 +302,7 @@ def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossove
 	for ci in range(p.stap_copies):
 		for obi in range(p.n_scaf,p.n_ori):
 			rbi = obi + ci*p.n_stap
-			types[rbi] = min([1,strands[obi]]) + 1
+			types[rbi] = 2
 			molecules[rbi] = strands[obi] + ci*(p.nstrand-1) + 1
 			if complements[obi] != -1:
 				if ci == 0:
@@ -220,7 +330,7 @@ def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossove
 	if p.circularScaf:
 		bonds = np.append(bonds,[[1,p.n_scaf,1]],axis=0)
 	else:
-		if getScafNeighbors(p.n_scaf-1,backbone_neighbors,complements)[1] == 0:
+		if getScafNeighbors(0,backbone_neighbors,complements)[0] == 0:
 			bonds = np.append(bonds,[[3,1,p.n_scaf]],axis=0)
 			bonds = np.append(bonds,[[3,1,p.n_scaf+p.nbead]],axis=0)
 			bonds = np.append(bonds,[[3,p.n_scaf,1+p.nbead]],axis=0)
@@ -228,8 +338,7 @@ def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossove
 	### staple backbone bonds
 	for ci in range(p.stap_copies):
 		for obi in range(p.n_scaf,p.n_ori):
-			bi_3p = backbone_neighbors[obi][1]
-			if bi_3p != -1:
+			if backbone_neighbors[obi][1] != -1:
 				if is_reserved_strand[strands[obi]]:
 					type = 3
 				else:
@@ -275,28 +384,34 @@ def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossove
 def composeGeoVis(outSimFold, strands, backbone_neighbors, r, p):
 
 	### initialize
-	molecules = np.zeros(p.nbead,dtype=int)
+	molecules = np.ones(p.nbead,dtype=int)
 	types = np.ones(p.nbead,dtype=int)
 	bonds = np.zeros((0,3),dtype=int)
 
 	### compile atom information
 	for rbi in range(p.n_scaf,p.nbead):
 		obi = rbi2obi(rbi, p)
-		types[rbi] = strands[obi] + 1
+		molecules[rbi] = strands[obi] + 1
+		types[rbi] = 2
 
-	### compile bond information
-	for bi in range(p.n_scaf):
-		if backbone_neighbors[bi][1] != -1:
-			type = 1
-			atom1 = bi + 1
-			atom2 = backbone_neighbors[bi][1] + 1
-			bonds = np.append(bonds,[[type,atom1,atom2]],axis=0)
+	### scaffold backbone bonds
+	for bi in range(p.n_scaf-1):
+		type = 1
+		atom1 = bi + 1
+		atom2 = bi + 2
+		bonds = np.append(bonds,[[type,atom1,atom2]],axis=0)
+
+	### scaffold end-to-end bond
+	if p.circularScaf:
+		bonds = np.append(bonds,[[1,p.n_scaf,1]],axis=0)
+
+	### staple backbone bonds
 	for ci in range(p.stap_copies):
-		for bi in range(p.n_scaf,p.n_ori):
-			if backbone_neighbors[bi][1] != -1:
+		for obi in range(p.n_scaf,p.n_ori):
+			if backbone_neighbors[obi][1] != -1:
 				type = 1
-				atom1 = bi + ci*p.n_stap + 1
-				atom2 = backbone_neighbors[bi][1] + ci*p.n_stap + 1
+				atom1 = obi + ci*p.n_stap + 1
+				atom2 = backbone_neighbors[obi][1] + ci*p.n_stap + 1
 				bonds = np.append(bonds,[[type,atom1,atom2]],axis=0)
 
 	### write file
@@ -363,7 +478,7 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle
 		   f"pair_style      hybrid zero {p.r12_cut_WCA:0.2f} lj/cut {p.r12_cut_WCA:0.2f}\n"
 			"pair_modify     pair lj/cut shift yes\n"
 		   f"pair_coeff      * * lj/cut {p.epsilon:0.2f} {p.sigma:0.2f} {p.r12_cut_WCA:0.2f}\n"
-		    "pair_coeff      * 3 zero\n"
+			"pair_coeff      * 3 zero\n"
 			"special_bonds   lj 0.0 1.0 1.0\n")
 
 		### bonded interactions
@@ -371,7 +486,7 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle
 		   f"bond_style      hybrid zero harmonic table linear {npoint_bond}\n"
 		   f"bond_coeff      1 harmonic {p.k_x/2:0.2f} {p.r12_eq:0.2f}\n"
 		   f"bond_coeff      2 table bond_hyb.txt hyb\n"
-		    "bond_coeff      3 zero\n")
+			"bond_coeff      3 zero\n")
 
 		### angled interactions
 		if nangle:
@@ -462,9 +577,9 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle
 			"variable        angle_count equal f_angle_hist[1]\n"
 			"variable        var_step equal step\n"
 		   f"fix             print_hyb all print {int(p.dump_every)} &\n"
-            "                \"Timestep ${var_step}  |  ${hyb_count}/"
-                           f"{nhyb}" + " hybridizations  |  ${angle_count}/"
-                           f"{nangle}" + " angles activated\"\n\n")
+			"                \"Timestep ${var_step}  |  ${hyb_count}/"
+						   f"{nhyb}" + " hybridizations  |  ${angle_count}/"
+						   f"{nangle}" + " angles activated\"\n\n")
 
 		### debugging output
 		if p.debug:
@@ -749,7 +864,7 @@ def writeReactBond(outSimFold, backbone_neighbors, complements, is_crossover, p)
 			print("")
 
 		molPreFile = f"{outReactFold}bondHyb{ri+1:0>{len_nreact}}_mol_pre.txt"
-		with open(molPreFile,'w') as f:
+		with open(molPreFile, 'w') as f:
 
 			atoms = copy.deepcopy(atoms_all[ri])
 			bonds = copy.deepcopy(bonds_all[ri])
@@ -772,7 +887,7 @@ def writeReactBond(outSimFold, backbone_neighbors, complements, is_crossover, p)
 			f.write("2\t2\n")
 
 		molPstFile = f"{outReactFold}bondHyb{ri+1:0>{len_nreact}}_mol_pst.txt"
-		with open(molPstFile,'w') as f:
+		with open(molPstFile, 'w') as f:
 
 			atoms = copy.deepcopy(atoms_all[ri])
 			bonds = copy.deepcopy(bonds_all[ri])
@@ -796,7 +911,7 @@ def writeReactBond(outSimFold, backbone_neighbors, complements, is_crossover, p)
 			f.write("2\t2\n")
 
 		mapFile = f"{outReactFold}bondHyb{ri+1:0>{len_nreact}}_map.txt"
-		with open(mapFile,'w') as f:
+		with open(mapFile, 'w') as f:
 
 			f.write("## Hybridization\n")
 			f.write(f"{natom} equivalences\n")
@@ -1171,7 +1286,7 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 			print("")
 
 		molFile = f"{outReactFold}angleHyb{ri+1:0>{len_nreact_hyb}}_mol_pre.txt"
-		with open(molFile,'w') as f:
+		with open(molFile, 'w') as f:
 
 			atoms = copy.deepcopy(atoms_all_hyb[ri])
 			bonds = copy.deepcopy(bonds_all_hyb[ri])
@@ -1216,7 +1331,7 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 			f.write("4\t7 8 9\n")
 
 		molFile = f"{outReactFold}angleHyb{ri+1:0>{len_nreact_hyb}}_mol_pst.txt"
-		with open(molFile,'w') as f:
+		with open(molFile, 'w') as f:
 
 			atoms = copy.deepcopy(atoms_all_hyb[ri])
 			bonds = copy.deepcopy(bonds_all_hyb[ri])
@@ -1264,7 +1379,7 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 			f.write("4\t7 8 9\n")
 
 		mapFile = f"{outReactFold}angleHyb{ri+1:0>{len_nreact_hyb}}_map.txt"
-		with open(mapFile,'w') as f:
+		with open(mapFile, 'w') as f:
 
 			f.write("## Hybridization\n")
 			f.write(f"{natom} equivalences\n")
@@ -1311,7 +1426,7 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 			print("")
 
 		molFile = f"{outReactFold}angleDehyb{ri+1:0>{len_nreact_dehyb}}_mol.txt"
-		with open(molFile,'w') as f:
+		with open(molFile, 'w') as f:
 
 			atoms = atoms_all_dehyb[ri]
 			bonds = bonds_all_dehyb[ri]
@@ -1341,7 +1456,7 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 			f.write("4\t7 8 9\n")
 
 		mapFile = f"{outReactFold}angleDehyb{ri+1:0>{len_nreact_dehyb}}_map.txt"
-		with open(mapFile,'w') as f:
+		with open(mapFile, 'w') as f:
 
 			f.write("## Dehybridization\n")
 			f.write(f"{natom} equivalences\n")
@@ -1441,7 +1556,7 @@ def initPositions(strands, p):
 			if not ars.checkOverlap(r_propose,r[:rbi],p.sigma,p.dbox):
 				if strands[obi] > 0:
 					break
-				elif (abs(r_propose)<dbox_scaf/2).all():
+				elif all(abs(r_propose)<dbox_scaf/2):
 					break
 
 			### if loop not broken update bead fail count
@@ -1610,10 +1725,10 @@ def buildDNAfoldModel(cadFile, p):
 	print("Using " + str(p.n_scaf) + " scaffold beads and " + str(p.n_stap) + " staple beads.")
 
 	### initialze interaction and geometry arrays
-	vstrands = [0 for i in range(p.n_ori)]
 	strands = [0 for i in range(p.n_ori)]
 	backbone_neighbors = [[-1,-1] for i in range(p.n_ori)]
 	complements = [-1 for i in range(p.n_ori)]
+	vstrands = [0 for i in range(p.n_ori)]
 	is_crossover = [False for i in range(p.n_ori)]
 
 	### initialize nucleotide and bead indices
@@ -1624,6 +1739,17 @@ def buildDNAfoldModel(cadFile, p):
 	ni_scaffoldArr = find(fiveP_end_scaf[0], fiveP_end_scaf[1], scaffold)
 	scaffold[ni_scaffoldArr].extend([ni_current, bi_current])
 	vstrands[bi_current] = scaffold[ni_scaffoldArr][0]
+	vstrand = scaffold[ni_scaffoldArr][0]
+	vstrand_prev = vstrand
+
+	### error message
+	if scaffold[ni_scaffoldArr][0] % 2 == 0:
+		if scaffold[ni_scaffoldArr][1] % p.nnt_per_bead != 0:
+			print(f"Error: Scaffold 5' end not located at multiple-of-8 position (vstrand {vstrand}).")
+			sys.exit()
+	elif scaffold[ni_scaffoldArr][1] % p.nnt_per_bead != 7:
+		print(f"Error: Scaffold 5' end not located at multiple-of-8 position (vstrand {vstrand}).")
+		sys.exit()
 
 	### track along scaffold until 3' end eached
 	while scaffold[ni_scaffoldArr][4] != -1:
@@ -1633,12 +1759,28 @@ def buildDNAfoldModel(cadFile, p):
 		ni_current += 1
 		bi_current = ni_current // p.nnt_per_bead
 		scaffold[ni_scaffoldArr].extend([ni_current, bi_current])
+		vstrand = scaffold[ni_scaffoldArr][0]
 
 		### store vstrand and backbone bonds for new beads
-		if bi_current > (ni_current-1)//p.nnt_per_bead:
-			vstrands[bi_current] = scaffold[ni_scaffoldArr][0]
+		if bi_current > (ni_current-1) // p.nnt_per_bead:
 			backbone_neighbors[bi_current][0] = bi_current-1
 			backbone_neighbors[bi_current-1][1] = bi_current
+			vstrands[bi_current] = scaffold[ni_scaffoldArr][0]
+
+		### error message
+		elif vstrand != vstrand_prev:
+			print("Error: Scaffold crossover not located at nultiple-of-8 position.")
+			sys.exit()
+		vstrand_prev = vstrand
+
+	### error message
+	if scaffold[ni_scaffoldArr][0] % 2 == 0:
+		if scaffold[ni_scaffoldArr][1] % p.nnt_per_bead != 7:
+			print(f"Error: Scaffold 3' end not located at multiple-of-8 position (vstrand {vstrand}).")
+			sys.exit()
+	elif scaffold[ni_scaffoldArr][1] % p.nnt_per_bead != 0:
+		print(f"Error: Scaffold 3' end not located at multiple-of-8 position (vstrand {vstrand}).")
+		sys.exit()
 
 	### loop over staples
 	nstap = len(fiveP_ends_stap)
@@ -1651,13 +1793,24 @@ def buildDNAfoldModel(cadFile, p):
 		### pick up nucleotide and bead indexing with 5' staple end
 		ni_staplesArr = find(fiveP_ends_stap[sti][0],fiveP_ends_stap[sti][1], staples)
 		staples[ni_staplesArr].extend([ni_current, bi_current])
-		vstrands[bi_current] = staples[ni_staplesArr][0]
 		strands[bi_current] = sti+1
+		vstrands[bi_current] = staples[ni_staplesArr][0]
+		vstrand = staples[ni_staplesArr][0]
+		vstrand_prev = vstrand
 
 		### identify paired beads
 		if scaffold[ni_staplesArr][2] != -1 or scaffold[ni_staplesArr][4] != -1:
 			complements[scaffold[ni_staplesArr][7]] = bi_current
 			complements[bi_current] = scaffold[ni_staplesArr][7]
+
+		### error message
+		if staples[ni_staplesArr][0] % 2 == 0:
+			if staples[ni_staplesArr][1] % p.nnt_per_bead != 7:
+				print(f"Error: Staple 5' end not located at multiple-of-8 position (vstrand {vstrand}).")
+				sys.exit()
+		elif staples[ni_staplesArr][1] % p.nnt_per_bead != 0:
+			print(f"Error: Staple 5' end not located at multiple-of-8 position (vstrand {vstrand}).")
+			sys.exit()
 
 		### track along staple until 3' end eached
 		while staples[ni_staplesArr][4] != -1:
@@ -1667,18 +1820,35 @@ def buildDNAfoldModel(cadFile, p):
 			ni_current += 1
 			bi_current = ni_current // p.nnt_per_bead
 			staples[ni_staplesArr].extend([ni_current, bi_current])
+			vstrand = staples[ni_staplesArr][0]
 
 			### store vstrand, strand, and backbone bonds for new beads
 			if bi_current > (ni_current-1) // p.nnt_per_bead:
 				strands[bi_current] = sti+1
-				vstrands[bi_current] = scaffold[ni_staplesArr][0]
 				backbone_neighbors[bi_current][0] = bi_current-1
 				backbone_neighbors[bi_current-1][1] = bi_current
+				vstrands[bi_current] = scaffold[ni_staplesArr][0]
 
 				### identify paired beads
 				if scaffold[ni_staplesArr][2] != -1 or scaffold[ni_staplesArr][4] != -1:
 					complements[scaffold[ni_staplesArr][7]] = bi_current
 					complements[bi_current] = scaffold[ni_staplesArr][7]
+
+				### error message
+				elif vstrand != vstrand_prev:
+					print(f"Error: Staple crossover not located at nultiple-of-8 position (vstrand {vstrand}).")
+					sys.exit()
+				else:
+					vstrand_prev = vstrand
+
+		### error message
+		if staples[ni_staplesArr][0] % 2 == 0:
+			if staples[ni_staplesArr][1] % p.nnt_per_bead != 0:
+				print(f"Error: Staple 3' end not located at multiple-of-8 position (vstrand {vstrand}).")
+				sys.exit()
+		elif staples[ni_staplesArr][1] % p.nnt_per_bead != 7:
+			print(f"Error: Staple 3' end not located at multiple-of-8 position (vstrand {vstrand}).")
+			sys.exit()
 
 	### identify crossovers
 	for bi in range(1, p.n_ori):
@@ -1707,6 +1877,7 @@ def parseCaDNAno(cadFile):
 	print("Parsing caDNAno file...")
 	
 	### load caDNAno file
+	ars.testFileExist(cadFile,"caDNAno")
 	with open(cadFile, 'r') as f:
 		json_string = f.read()
 	j = json.loads(json_string)
@@ -1761,6 +1932,11 @@ def parseCaDNAno(cadFile):
 	### tally up the nucleotides
 	nnt_scaf = sum(1 for s in scaffold if s[2] != -1 or s[4] != -1)
 	nnt_stap = sum(1 for s in staples if s[2] != -1 or s[4] != -1)
+
+	### error message
+	if 'fiveP_end_scaf' not in locals():
+		print("Error: Scaffold 5' end not found.")
+		sys.exit()
 	
 	### report
 	print(f"Found {nnt_scaf} scaffold nucleotides and {nnt_stap} staple nucleotides.")

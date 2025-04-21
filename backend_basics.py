@@ -1,5 +1,6 @@
 import arsenal as ars
 import utils
+import argparse
 import multiprocessing
 from multiprocessing import Pool
 import numpy as np
@@ -33,15 +34,13 @@ import sys
 
 def main():
 
-	### input files
-	simID = "16HB"
-	simTag = ""
-	srcFold = "/Users/dduke/Files/dnafold_lmp/"
-	multiSim = False
-
-	### data reading parameters
-	nstep_skip = 0  				# number of recorded initial steps to skip
-	coarse_time = 10 				# coarse factor for time steps
+	### get arguments
+	parser = argparse.ArgumentParser()
+	parser.add_argument('--copiesFile',		type=str,	default=None,	help='name of copies file, which contains a list of simulation folders')	
+	parser.add_argument('--simFold',		type=str,	default=None,	help='name of simulation folder, should exist within current directory')
+	parser.add_argument('--rseed',			type=int,	default=1,		help='random seed, used to find simFold if necessary')
+	parser.add_argument('--nstep_skip',		type=int,	default=0,		help='number of recorded initial steps to skip')
+	parser.add_argument('--coarse_time',	type=int,	default=1,		help='coarse factor for time steps')
 
 	### analysis options
 	center = 1						# what to place at center
@@ -50,14 +49,35 @@ def main():
 	bicolor = True					# whether to use only 2 colors (scaf and stap)
 	r12_cut_hyb = 2					# hybridization potential cutoff radius
 
+	### set arguments
+	args = parser.parse_args()
+	copiesFile = args.copiesFile
+	simFold = args.simFold
+	rseed = args.rseed
+	nstep_skip = args.nstep_skip
+	coarse_time = args.coarse_time
+
+
+################################################################################
+### Heart
+
 	### get simulation folders
-	simHomeFold = srcFold + simID + simTag + "/"
-	simFolds, nsim = utils.getSimFolds(simHomeFold, multiSim)
+	simFolds, nsim = utils.getSimFolds(copiesFile, simFold, rseed)
+
+	### get connectivity vars
+	geoFile = simFolds[0] + "geometry.in"
+	strands, bonds_backbone, complements, n_scaf, nbead, circularScaf = processGeo(geoFile)
+
+	### write conectivity vars
+	ars.createSafeFold("analysis")
+	outConnFile = "analysis/connectivity_vars.pkl"
+	with open(outConnFile, 'wb') as f:
+		pickle.dump([strands, bonds_backbone, complements, n_scaf, nbead, circularScaf], f)
 
 	### assemble data params
 	params = []
 	for i in range(nsim):
-		params.append((simFolds[i], nstep_skip, coarse_time, center, unwrap, set_color, bicolor, r12_cut_hyb))
+		params.append((simFolds[i], strands, bonds_backbone, complements, nstep_skip, coarse_time, center, unwrap, set_color, bicolor, r12_cut_hyb))
 
 	### run in parallel if multiple simulations
 	if nsim == 1:
@@ -69,19 +89,15 @@ def main():
 
 
 ### body of main function
-def submain(simFold, nstep_skip, coarse_time, center, unwrap, set_color, bicolor, r12_cut_hyb):
+def submain(simFold, strands, bonds_backbone, complements, nstep_skip, coarse_time, center, unwrap, set_color, bicolor, r12_cut_hyb):
 
 	### input files
 	datFile = simFold + "trajectory.dat"
-	geoFile = simFold + "geometry.in"
 
 	### output files
 	outFold = simFold + "analysis/"
 	outDatFile = outFold + "trajectory_centered.dat"
 	outGeoVisFile = outFold + "geometry_vis.in"
-	outDatScafFile = outFold + "trajectory_centered_scaf.dat"
-	outGeoVisScafFile = outFold + "geometry_vis_scaf.in"
-	outConnFile = outFold + "connectivity_vars.pkl"
 	outHybFile = outFold + "hyb_status.dat"
 
 	### create analysis folder
@@ -93,24 +109,13 @@ def submain(simFold, nstep_skip, coarse_time, center, unwrap, set_color, bicolor
 	points_centered = ars.centerPointsMolecule(points, strands, dbox, center, unwrap)
 	colors = np.minimum(2,strands) if bicolor else strands
 
-	### interpret complete geometry
-	bonds_backbone, complements, n_scaf, circularScaf = processGeo(geoFile)
-
 	### write complete trajectories
 	writeAtomDump(outDatFile, dbox, points_centered, colors, set_color, dump_every)
 	ars.writeGeo(outGeoVisFile, dbox, points[0], types=colors, bonds=bonds_backbone)
 
-	### write scaffold-only trajectories
-	writeAtomDump(outDatScafFile, dbox, points_centered[:,:n_scaf], colors[:n_scaf], set_color, dump_every)
-	ars.writeGeo(outGeoVisScafFile, dbox, points[0,:n_scaf], types=colors[:n_scaf], bonds=bonds_backbone[:n_scaf-1+circularScaf])
-
 	### hybridization analysis
-	hyb_status = calcHybridizations(points, complements, dbox, r12_cut_hyb)
+	hyb_status = calcHybStatus(points, complements, dbox, r12_cut_hyb)
 	writeHybStatus(outHybFile, hyb_status, dump_every)
-
-	### write conectivity vars
-	with open(outConnFile,'wb') as f:
-		pickle.dump([strands, bonds_backbone, complements, n_scaf, circularScaf], f)
 
 
 ################################################################################
@@ -118,19 +123,22 @@ def submain(simFold, nstep_skip, coarse_time, center, unwrap, set_color, bicolor
 
 ### extract information from geometry file
 def processGeo(geoFile):
-	types, charges, bonds = ars.readGeo(geoFile)[2:5]
+	strands, types, charges, bonds = ars.readGeo(geoFile)[1:5]
 
-	### calculate complements
+	### bead numbers and trimming
 	n_scaf = len(types[types==1])
 	nbead = len(types)-n_scaf
-	complements = getComplements(charges, nbead, n_scaf)
+	strands = strands[:nbead]
+
+	### calculate complements
+	complements = getComplements(charges, n_scaf, nbead)
 
 	### analyze bonds
 	bonds_backbone = bonds[ (bonds[:,0]!=2) & (bonds[:,1]<=nbead) & (bonds[:,2]<=nbead) ]
 	circularScaf = True if np.sum(bonds_backbone[:,1]<=n_scaf)==n_scaf else False
 
 	### return results
-	return bonds_backbone, complements, n_scaf, circularScaf
+	return strands, bonds_backbone, complements, n_scaf, nbead, circularScaf
 
 
 ### write lammps-style atom dump
@@ -168,14 +176,14 @@ def writeHybStatus(outHybFile, hyb_status, dump_every):
 		for i in range(nstep):
 			f.write(f"TIMESTEP {i*dump_every}\n")
 			for j in range(nbead):
-				f.write(f"{i+1} {hyb_status[i,j]}\n")
+				f.write(f"{j+1} {hyb_status[i,j]}\n")
 
 
 ################################################################################
 ### Calculation Managers
 
 ### use charges to get complimentary beads (for all beads)
-def getComplements(charges, nbead, n_scaf):
+def getComplements(charges, n_scaf, nbead):
 	complements = [[] for i in range(nbead)]
 	for i in range(n_scaf):
 		for j in range(n_scaf,nbead):
@@ -188,23 +196,27 @@ def getComplements(charges, nbead, n_scaf):
 	return complements
 
 
-### analyze trajectory to get hybridiazation status of each scaffold bead for each timestep
-def calcHybridizations(points, complements, dbox, r12_cut_hyb):
+### analyze trajectory to get hybridiazation status of each scaffold bead for each time step
+# 1 for hybridized
+# 0 for unhybridized
+# -1 for no complement
+def calcHybStatus(points, complements, dbox, r12_cut_hyb):
 	r12_cut_hyb = 2
 	nstep = points.shape[0]
 	nbead = points.shape[1]
 	hyb_status = np.zeros((nstep,nbead),dtype=int)
 	for i in range(nstep):
 		for j in range(nbead):
-			if (points[i,j,:]==[0,0,0]).all():
-				continue
-			for k in range(len(complements[j])):
-				c = complements[j][k]-1
-				if (points[i,c,:]==[0,0,0]).all():
-					continue
-				sep = np.linalg.norm( ars.applyPBC( points[i,j,:]-points[i,c,:], dbox ) )
-				if sep < r12_cut_hyb:
-					hyb_status[i,j] = 1
+			if len(complements[j]) == 0:
+				hyb_status[i,j] = -1
+			elif any(points[i,j,:]!=[0,0,0]):
+				for k in range(len(complements[j])):
+					c = complements[j][k]-1
+					if any(points[i,c,:]!=[0,0,0]):
+						sep = np.linalg.norm( ars.applyPBC( points[i,j,:]-points[i,c,:], dbox ) )
+						if sep < r12_cut_hyb:
+							hyb_status[i,j] = 1
+	### result
 	return hyb_status
 
 

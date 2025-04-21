@@ -1,5 +1,7 @@
 import arsenal as ars
+import utils
 import numpy as np
+import argparse
 import random
 import os
 import sys
@@ -9,6 +11,10 @@ import sys
   # the files necessary for restarting the simulation.
 # if adding reserved staples, the restart geometry is used; otherwise, the binary
   # restart file is used.
+# unlike most other scripts in this package, this script cannot read a copies file
+  # and perform its operation on a batch of copied simulations; this is due to the
+  # difficulty and unintuitiveness of matching simulations with random seeds, which
+  # would neccesitate a new copies file that included associated random seeds.
 
 
 ################################################################################
@@ -16,58 +22,69 @@ import sys
 
 def main():
 
-	### input files
-	simID = "16HB"
-	simTag = ""
-	srcFold = "/Users/dduke/Files/dnafold_lmp/"
-	multiSim = False
+	### get arguments
+	parser = argparse.ArgumentParser()
+	parser.add_argument('--nstep',		type=float,	required=True,	help='number of simulation steps')
+	parser.add_argument('--simFold',	type=str,	default=None,	help='name of simulation folder, should exist within current directory')
+	parser.add_argument('--rseed',		type=int,	default=1,		help='random seed, used to find simFold if necessary')
+	parser.add_argument('--rstapFile',	type=str,	default=None,	help='if reserving staples, path to reserved staples file')
 
 	### parameters
-	nstep = 1E6				# number of simulation steps
-	addStap = True			# whether to add reserved staples
-	r12_eq = 2.72			# equilibrium bead separation
-	sigma = 2.14			# bead Van der Waals radius
-	rseed = 1				# random seed
+	r12_eq = 2.72				# if adding staples, equilibrium bead separation
+	sigma = 2.14				# if adding staples, bead Van der Waals radius
 
-	### find simulation folder
-	simFold  = srcFold + simID + simTag + "/"
-	if multiSim:
-		simFold += f"sim{rseed:02.0f}/"
+	### set arguments
+	args = parser.parse_args()
+	nstep = int(args.nstep)
+	simFold = args.simFold
+	rseed = args.rseed
+	rstapFile = args.rstapFile
 
-	### add reserved staples
-	if addStap:
+	### get simulation folders
+	simFolds, nsim = utils.getSimFolds(None, simFold, rseed)
 
-		### read geometry file
-		geoFile = simFold + "restart_geometry.out"
-		points, strands, types, charges, bonds, angles = ars.readGeo(geoFile)
-		dbox3 = ars.getDbox3(geoFile)
-		nstrand = max(strands)
+
+################################################################################
+### Heart
+
+	### set random seed
+	random.seed(rseed)
+
+	### loop over simulations
+	for i in range(nsim):
+
+		### edit input file
+		lammpsFile = simFolds[i] + "lammps.in"
+		editInput(lammpsFile, nstep, rstapFile)
 
 		### add reserved staples
-		random.seed(rseed)
-		stapFile = simFold + "metadata/reserved_staples.txt"
-		is_reserved_strand = readRstap(stapFile, nstrand)
-		points, types = addReservedStap(points, strands, types, is_reserved_strand, r12_eq, sigma, dbox3[0])
-		bonds = updateBondTypes(bonds, types)
+		if rstapFile is not None:
 
-		### write geometry file
-		outGeoFile = simFold + "restart_geometry.in"
-		ars.writeGeo(outGeoFile, dbox3, points, strands, types, bonds, angles, nangleType=2, charges=charges, precision=16)
+			### read geometry file
+			geoFile = simFolds[i] + "restart_geometry.out"
+			points, strands, types, charges, bonds, angles = ars.readGeo(geoFile)
+			dbox3 = ars.getDbox3(geoFile)
+			nstrand = max(strands)
 
-	### edit input file
-	lammpsFile = simFold + "lammps.in"
-	editInput(lammpsFile, nstep, addStap)
+			### add reserved staples
+			is_reserved_strand = readRstap(rstapFile, nstrand)
+			points, types = addReservedStap(points, strands, types, is_reserved_strand, r12_eq, sigma, dbox3[0])
+			bonds = updateBondTypes(bonds, types)
+
+			### write geometry file
+			outGeoFile = simFolds[i] + "restart_geometry.in"
+			ars.writeGeo(outGeoFile, dbox3, points, strands, types, bonds, angles, nangleType=2, charges=charges, precision=16)
 
 
 ################################################################################
 ### File Handlers
 
 ### read old lammps file and write 
-def editInput(lammpsFile, nstep, addStap):
+def editInput(lammpsFile, nstep, rstapFile):
 
 	### read old lammps file
 	ars.testFileExist(lammpsFile)
-	with open(lammpsFile, 'r') as f:
+	with open(lammpsFile,'r') as f:
 		content_in = f.readlines()
 
 	### parse the content and write edited content
@@ -80,7 +97,7 @@ def editInput(lammpsFile, nstep, addStap):
 		if content_in[i].startswith("## Geometry"):
 
 			### if adding stales, use geometry
-			if addStap:
+			if rstapFile is not None:
 				content_out.append("read_data       restart_geometry.in &\n")
 				content_out.append("                extra/bond/per/atom 10 &\n")
 				content_out.append("                extra/angle/per/atom 10 &\n")
@@ -119,7 +136,7 @@ def editInput(lammpsFile, nstep, addStap):
 		i += 1
 
 	### write edited lammps file
-	with open(lammpsFile, 'w') as f:
+	with open(lammpsFile,'w') as f:
 		f.writelines(content_out)
 
 
@@ -129,7 +146,7 @@ def readRstap(rstapFile, nstrand):
 
 	### read reserved staples file
 	ars.testFileExist(rstapFile,"reserved staples")
-	with open(rstapFile, 'r') as f:
+	with open(rstapFile,'r') as f:
 		reserved_strands = [ int(line.strip()) for line in f ]
 	for si in range(len(reserved_strands)):
 		is_reserved_strand[reserved_strands[si]-1] == True
