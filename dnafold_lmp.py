@@ -1,4 +1,4 @@
-import arsenal as ars
+import armament as ars
 import utilsLocal
 import argparse
 import parameters
@@ -31,17 +31,17 @@ import os
 def main():
 
 	### where to get files
-	useMyFiles = False
+	useMyFiles = True
 
 	### extract files from my mac
 	if useMyFiles:
 
 		### chose design
 		desID = "16HB2x2x4"
-		simTag = "/control"
+		simTag = "/resDes08"
 		simType = "production"
 		rstapTag = None
-		rseed = 1
+		rseed = 10
 
 		### computational parameters
 		nstep			= 2E8		# steps			- number of simulation steps

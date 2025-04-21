@@ -1,4 +1,4 @@
-import arsenal as ars
+import armament as ars
 import utils
 import utilsLocal
 from ovito import scene
@@ -24,7 +24,7 @@ import sys
 def main():
 
 	### where to get files
-	useMyFiles = False
+	useMyFiles = True
 
 	### extract files from local system
 	if useMyFiles:

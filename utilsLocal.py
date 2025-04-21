@@ -1,4 +1,4 @@
-import arsenal as ars
+import armament as ars
 import sys
 import os
 

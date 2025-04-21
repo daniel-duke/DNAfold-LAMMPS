@@ -1,4 +1,4 @@
-import arsenal as ars
+import armament as ars
 from scipy import stats
 import numpy as np
 import json

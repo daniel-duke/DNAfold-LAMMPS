@@ -1,4 +1,4 @@
-import arsenal as ars
+import armament as ars
 import utils
 import argparse
 import matplotlib.pyplot as plt
