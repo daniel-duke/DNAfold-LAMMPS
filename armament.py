@@ -13,7 +13,7 @@ def readAtomDump(datFile, nstep_skip=0, coarse_time=1, bdis="all", coarse_points
 	### notes
 	# assumes the bdis array stores the atom indices starting from 1.
 	# assumes the timestep of the second step is the dump frequency.
-	# assumes the box diameter does not change.
+	# assumes the box diameter is uniform accross dimensions and does not change.
 
 	### load trajectory file
 	print("Loading LAMMPS-style trajectory...")
@@ -23,8 +23,9 @@ def readAtomDump(datFile, nstep_skip=0, coarse_time=1, bdis="all", coarse_points
 	print("Parsing trajectory...")
 
 	### extract metadata
-	dbox = 2*float(content[5].split()[1])
 	nbd_total = int(content[3].split()[0])
+	dbox = 2*float(content[5].split()[1])
+	dump_every = int(content[nbd_total+10].split()[0])
 	nstep_recorded = int(len(content)/(nbd_total+9))
 	nstep_trimmed = int((nstep_recorded-nstep_skip-1)/coarse_time)+1
 	if nstep_trimmed <= 0:
@@ -41,8 +42,7 @@ def readAtomDump(datFile, nstep_skip=0, coarse_time=1, bdis="all", coarse_points
 		sys.exit()
 
 	### report step counts
-	nstep_per_record = int(content[nbd_total+10].split()[0])
-	print("{:1.2e} steps in simulation".format(nstep_recorded*nstep_per_record))
+	print("{:1.2e} steps in simulation".format(nstep_recorded*dump_every))
 	print("{:1.2e} steps recorded".format(nstep_recorded))
 	print("{:1.2e} steps used".format(nstep_used))
 
@@ -90,11 +90,11 @@ def readAtomDump(datFile, nstep_skip=0, coarse_time=1, bdis="all", coarse_points
 	if len(bdis) == 1:
 		return points, col2s, dbox
 	else:
-		return points, col2s, groups, dbox
+		return points, col2s, dbox, groups
 
 
 ### extract number of steps from lammps-style trajectory
-def getNstep(datFile):
+def getNstep(datFile, nstep_skip=0, coarse_time=1):
 
 	### load trajectory file
 	ars.testFileExist(datFile, "trajectory")
@@ -103,8 +103,9 @@ def getNstep(datFile):
 
 	### extract dump frequency
 	nbd_total = int(content[3].split()[0])
-	nstep = int(len(content)/(nbd_total+9))
-	return nstep
+	nstep_recorded = int(len(content)/(nbd_total+9))
+	nstep_trimmed = int((nstep_recorded-nstep_skip-1)/coarse_time)+1
+	return nstep_trimmed
 
 
 ### extract dump frequency from lammps-style trajectory
@@ -251,6 +252,21 @@ def getDbox3(geoFile):
 		if all(x > 0 for x in dbox3):
 			break
 	return dbox3
+
+
+### read cluster file
+def readCluster(clusterFile):
+	ars.testFileExist(clusterFile, "cluster")
+	with open(clusterFile, 'r') as f:
+		content = f.readlines()
+	ncluster = int(len(content)/2)
+	clusters = [None]*ncluster
+	for c in range(ncluster):
+		indices = content[1+c*2].split()
+		clusters[c] = [None]*len(indices)
+		for i in range(len(indices)):
+			clusters[c][i] = int(indices[i])
+	return clusters
 
 
 ### read file containing names of simulation copies

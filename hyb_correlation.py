@@ -96,7 +96,7 @@ def main():
 		nstep_allSim = np.zeros(nsim,dtype=int)
 		for i in range(nsim):
 			datFile = simFolds[i] + "analysis/trajectory_centered.dat"
-			nstep_allSim[i] = ars.getNstep(datFile)
+			nstep_allSim[i] = ars.getNstep(datFile, nstep_skip, coarse_time)
 		nstep_min = int(min(nstep_allSim))
 
 		### loop through simulations
@@ -107,13 +107,14 @@ def main():
 
 			### calculate hyb times
 			hybFile = simFolds[i] + "analysis/hyb_status.dat"
-			hyb_status, dump_every_hyb = utils.readHybStatus(hybFile, nstep_min)
-			first_hyb_times_scaled_allSim[i] = utils.calcFirstHybTimes(hyb_status, complements, n_scaf, dump_every_hyb)[1]
+			hyb_status = utils.readHybStatus(hybFile, nstep_skip, coarse_time, nstep_min)
+			dump_every = utils.getDumpEveryHyb(hybFile)*coarse_time
+			first_hyb_times_scaled_allSim[i] = utils.calcFirstHybTimes(hyb_status, complements, n_scaf, dump_every)[1]
 			n_hyb_frac_allSim[i] = np.sum(hyb_status==1,axis=1)/nbead
 
 			### calculate crystallinity
 			datFile = simFolds[i] + "analysis/trajectory_centered.dat"
-			bdis_scaf = bdis=list(range(1,n_scaf+1))
+			bdis_scaf = list(range(1,n_scaf+1))
 			points, _, dbox = ars.readAtomDump(datFile, nstep_skip, coarse_time, bdis=bdis_scaf, nstep_max=nstep_min); print("")
 			S = utils.calcCrystallinity(points, dbox)
 			S_allSim[i] = ars.movingAvg(S, mov_avg_stride)

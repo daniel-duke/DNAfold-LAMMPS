@@ -33,17 +33,20 @@ def main():
 		desID = "16HB2x2x2"
 
 		### analysis options
-		position_src = "oxdna"	  	# what type of files to use for bead positions (cadnano, oxdna)
 		confTag = "_ideal"			# if using oxdna position, tag for configuration file
-		reserveStap = True			# whether to reserve staples
 		rstapTag = "_des16"			# if reserving staples, tag for reserved staples file
 		circularScaf = True			# whether to add bond between scaffold ends
 
 		### get input files
 		cadFile = utilsLocal.getCadFile(desID)
-		if position_src == "oxdna":
+		rstapFile = utilsLocal.getRstapFile(desID, rstapTag) if rstapTag is not None else None
+
+		### determine position source
+		if confTag is not None:
+			position_src = "oxdna"
 			topFile, confFile = utilsLocal.getOxFiles(desID, confTag)
-		rstapFile = utilsLocal.getRstapFile(desID, rstapTag) if reserveStap else None
+		else:
+			position_src = "cadnano"
 
 		### set output folder
 		outFold = utilsLocal.getSimHomeFold(desID)
@@ -67,7 +70,7 @@ def main():
 		rstapFile = args.rstapFile
 		circularScaf = args.circularScaf
 
-		### check input
+		### determine position source
 		if topFile is not None and confFile is not None:
 			position_src = "oxdna"
 		else:
@@ -145,7 +148,7 @@ def writeOvito(ovitoFile, outGeoFile):
 ################################################################################
 ### File Handlers
 
-### read reserved staple file
+### read staple file
 def readRstap(rstapFile):
 
 	### read reserved staples file
@@ -164,6 +167,7 @@ def readRstap(rstapFile):
 def prepGeoData(r, strands, reserved_strands, circularScaf):
 	n_ori = len(strands)
 	n_scaf = np.sum(strands==1)
+	n_padCell = 2
 
 	### types
 	types = np.ones(n_ori)
@@ -184,7 +188,7 @@ def prepGeoData(r, strands, reserved_strands, circularScaf):
 		bonds = np.append(bonds, [[1,1,n_scaf]], axis=0)
 
 	### box diameter
-	dbox3 = [ max(abs(r[:,0]))+2.72, max(abs(r[:,1]))+2.4, max(abs(r[:,2]))+2.4 ]
+	dbox3 = [ max(abs(r[:,0]))+n_padCell*2.72, max(abs(r[:,1]))+n_padCell*2.4, max(abs(r[:,2]))+n_padCell*2.4 ]
 	dbox3 = [ 2*i for i in dbox3 ]
 
 	### return results

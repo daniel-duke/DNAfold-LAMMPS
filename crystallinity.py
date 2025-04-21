@@ -15,9 +15,6 @@ import os
 # this script will only work if "backend_basics.py" has already been run for
   # the given simulation (requires a populated "analysis" folder).
 
-## To Do
-# read cluster files and plot clustered crystallinity curves
-
 
 ################################################################################
 ### Parameters
@@ -29,6 +26,7 @@ def main():
 	parser.add_argument('--copiesFile',		type=str,	default=None,		help='name of copies file, which contains a list of simulation folders')	
 	parser.add_argument('--simFold',		type=str,	default=None,		help='name of simulation folder, should exist within current directory')
 	parser.add_argument('--rseed',			type=int,	default=1,			help='random seed, used to find simFold if necessary')
+	parser.add_argument('--clusterFile',	type=str,	default=None,		help='name of cluster file, ')	
 	parser.add_argument('--loadResults',	type=bool,	default=False,		help='whether to load the results from a pickle file')
 	parser.add_argument('--nstep_skip',		type=int,	default=0,			help='if not loading results, number of recorded initial steps to skip')
 	parser.add_argument('--coarse_time',	type=int,	default=1,			help='if not loading results, coarse factor for time steps')
@@ -39,10 +37,16 @@ def main():
 	copiesFile = args.copiesFile
 	simFold = args.simFold
 	rseed = args.rseed
+	clusterFile = args.clusterFile
 	loadResults = args.loadResults
 	nstep_skip = args.nstep_skip
 	coarse_time = args.coarse_time
 	mov_avg_stride = args.mov_avg_stride
+
+	### check arguments
+	if copiesFile is not None and clusterFile is not None:
+		clusterFile = None
+		print("Flag: Both copies and cluster file provided, so ignoring cluster file.")
 
 
 ################################################################################
@@ -64,47 +68,70 @@ def main():
 		nstep_allSim = np.zeros(nsim,dtype=int)
 		for i in range(nsim):
 			datFile = simFolds[i] + "analysis/trajectory_centered.dat"
-			nstep_allSim[i] = ars.getNstep(datFile)
+			nstep_allSim[i] = ars.getNstep(datFile, nstep_skip, coarse_time)
 		nstep_min = int(min(nstep_allSim))
 
-		### loop through simulations
-		S_allSim = np.zeros((nsim,nstep_min))
-		for i in range(nsim):
+		### get trajectory dump frequency
+		datFile = simFolds[0] + "analysis/trajectory_centered.dat"
+		dump_every = ars.getDumpEvery(datFile)*coarse_time
 
-			### calculate crystallinity
-			datFile = simFolds[i] + "analysis/trajectory_centered.dat"
-			bdis_scaf = list(range(1,n_scaf+1))
-			points, _, dbox = ars.readAtomDump(datFile, nstep_skip, coarse_time, bdis=bdis_scaf, nstep_max=nstep_min); print("")
-			dump_every_S = ars.getDumpEvery(datFile)*coarse_time
-			S = utils.calcCrystallinity(points, dbox)
-			S_allSim[i] = ars.movingAvg(S, mov_avg_stride)
+		### whole scaffold analysis
+		if clusterFile is None:
+			bdis = list(range(1,n_scaf+1))
+
+			### loop through simulations
+			S_allSim = np.zeros((nsim,nstep_min))
+			for i in range(nsim):
+
+				### calculate crustallinity
+				datFile = simFolds[i] + "analysis/trajectory_centered.dat"
+				points, _, dbox = ars.readAtomDump(datFile, nstep_skip, coarse_time, bdis=bdis, nstep_max=nstep_min); print("")
+				S = utils.calcCrystallinity(points, dbox)
+				S_allSim[i] = ars.movingAvg(S, mov_avg_stride)
+
+		### clustered scaffold analysis
+		else:
+			bdis = ars.readCluster(clusterFile)
+			ncluster = len(bdis)
+
+			### read trajectory
+			datFile = simFolds[0] + "analysis/trajectory_centered.dat"
+			points, _, dbox, molecules = ars.readAtomDump(datFile, nstep_skip, coarse_time, bdis=bdis, nstep_max=nstep_min); print("")
+			points = ars.sortPointsByMolecule(points, molecules)
+
+			### loop through clusters
+			S_allSim = np.zeros((ncluster,nstep_min))
+			for i in range(ncluster):
+
+				### calculate crustallinity
+				S = utils.calcCrystallinity(points[i], dbox)
+				S_allSim[i] = ars.movingAvg(S, mov_avg_stride)
 
 		### store results
 		resultsFile = "analysis/crystallinity_vars.pkl"
 		with open(resultsFile, 'wb') as f:
-			pickle.dump([S_allSim, dump_every_S], f)
+			pickle.dump([S_allSim, dump_every], f)
 
 	### load results
 	else:
 		resultsFile = "analysis/crystallinity_vars.pkl"
 		ars.testFileExist(resultsFile,"results")
 		with open(resultsFile, 'rb') as f:
-			[S_allSim, dump_every_S] = pickle.load(f)
+			[S_allSim, dump_every] = pickle.load(f)
 
 
 ################################################################################
 ### Results
 
 	### report best simulations
-	nsim = len(S_allSim)
-	if nsim > 1:
+	if copiesFile is not None:
 		copyNames = ars.readCopies(copiesFile)[0]
 		sorted_results = sorted(zip(S_allSim[:,-1],copyNames), reverse=True)
 		for S_final, copyName in sorted_results:
 			print(f"{copyName}: {S_final:0.4f}")
 
 	### plot
-	plotCrystallinity(S_allSim, dump_every_S)
+	plotCrystallinity(S_allSim, dump_every)
 	plt.show()
 
 

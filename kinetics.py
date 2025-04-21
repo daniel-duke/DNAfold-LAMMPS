@@ -20,11 +20,15 @@ def main():
 
 	### get arguments
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--copiesFile', type=str, required=True, help='name of copies file, which contains a list of simulation folders')	
+	parser.add_argument('--copiesFile',		type=str,	required=True,		help='name of copies file, which contains a list of simulation folders')	
+	parser.add_argument('--nstep_skip',		type=int,	default=0,			help='number of recorded initial steps to skip')
+	parser.add_argument('--coarse_time',	type=int,	default=1,			help='coarse factor for time steps')
 
 	### set arguments
 	args = parser.parse_args()
 	copiesFile = args.copiesFile
+	nstep_skip = args.nstep_skip
+	coarse_time = args.coarse_time
 
 	### get simulation folders
 	simFolds, nsim = utils.getSimFolds(copiesFile)
@@ -43,8 +47,12 @@ def main():
 	nstep_allSim = np.zeros(nsim,dtype=int)
 	for i in range(nsim):
 		datFile = simFolds[i] + "analysis/trajectory_centered.dat"
-		nstep_allSim[i] = ars.getNstep(datFile)
+		nstep_allSim[i] = ars.getNstep(datFile, nstep_skip, coarse_time)
 	nstep_min = int(min(nstep_allSim))
+
+	### get hybridization dump frequency
+	hybFile = simFolds[0] + "analysis/hyb_status.dat"
+	dump_every = utils.getDumpEveryHyb(hybFile)
 
 	### loop over simulations
 	hyb_status_allSim = np.zeros((nsim,nstep_min,nbead))
@@ -52,7 +60,7 @@ def main():
 
 		### analyze hybridizations
 		hybFile = simFolds[i] + "analysis/hyb_status.dat"
-		hyb_status_allSim[i], dump_every = utils.readHybStatus(hybFile, nstep_min)
+		hyb_status_allSim[i] = utils.readHybStatus(hybFile, nstep_skip, coarse_time, nstep_min)
 
 	### analyze kinetics
 	plotKinetics(hyb_status_allSim, strands, n_scaf, dump_every)

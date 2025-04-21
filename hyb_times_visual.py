@@ -97,7 +97,7 @@ def main():
 
 		### analyze hybridizations
 		hybFile = simFolds[i] + "analysis/hyb_status.dat"
-		hyb_status_allSim[i], dump_every = utils.readHybStatus(hybFile, nstep_min)
+		hyb_status_allSim[i], dump_every = utils.readHybStatus(hybFile, nstep_max=nstep_min)
 		first_hyb_times_allSim[i], first_hyb_times_scaled = utils.calcFirstHybTimes(hyb_status_allSim[i], complements, n_scaf, dump_every)
 
 		### write hybridization trajectory

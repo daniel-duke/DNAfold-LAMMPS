@@ -29,16 +29,12 @@ def main():
 	parser.add_argument('--copiesFile',		type=str,	default=None,	help='name of copies file, which contains a list of simulation folders')	
 	parser.add_argument('--simFold',		type=str,	default=None,	help='name of simulation folder, should exist within current directory')
 	parser.add_argument('--rseed',			type=int,	default=1,		help='random seed, used to find simFold if necessary')
-	parser.add_argument('--nstep_skip',		type=int,	default=0,		help='number of recorded initial steps to skip')
-	parser.add_argument('--coarse_time',	type=int,	default=1,		help='coarse factor for time steps')
 
 	### set arguments
 	args = parser.parse_args()
 	copiesFile = args.copiesFile
 	simFold = args.simFold
 	rseed = args.rseed
-	nstep_skip = args.nstep_skip
-	coarse_time = args.coarse_time
 
 	### scaffold and staple colors
 	scaf_color = ars.getColor("orchid")

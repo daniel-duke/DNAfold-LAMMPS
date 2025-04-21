@@ -9,8 +9,8 @@ import sys
 ## Description
 # this script reads the output from a previous dnafold_lmp simulation and writes
   # the files necessary for restarting the simulation.
-# if adding reserved staples, the restart geometry is used; otherwise, the binary
-  # restart file is used.
+# if adding staples, the restart geometry is used; otherwise, the binary restart
+  # file is used.
 # unlike most other scripts in this package, this script cannot read a copies file
   # and perform its operation on a batch of copied simulations; this is due to the
   # difficulty and unintuitiveness of matching simulations with random seeds, which
@@ -27,7 +27,7 @@ def main():
 	parser.add_argument('--nstep',		type=float,	required=True,	help='number of simulation steps')
 	parser.add_argument('--simFold',	type=str,	default=None,	help='name of simulation folder, should exist within current directory')
 	parser.add_argument('--rseed',		type=int,	default=1,		help='random seed, used to find simFold if necessary')
-	parser.add_argument('--rstapFile',	type=str,	default=None,	help='if reserving staples, path to reserved staples file')
+	parser.add_argument('--astapFile',	type=str,	default=None,	help='if adding staples, path to add staple file')
 
 	### parameters
 	r12_eq = 2.72				# if adding staples, equilibrium bead separation
@@ -38,7 +38,7 @@ def main():
 	nstep = int(args.nstep)
 	simFold = args.simFold
 	rseed = args.rseed
-	rstapFile = args.rstapFile
+	astapFile = args.astapFile
 
 	### get simulation folders
 	simFolds, nsim = utils.getSimFolds(None, simFold, rseed)
@@ -55,10 +55,10 @@ def main():
 
 		### edit input file
 		lammpsFile = simFolds[i] + "lammps.in"
-		editInput(lammpsFile, nstep, rstapFile)
+		editInput(lammpsFile, nstep, astapFile)
 
-		### add reserved staples
-		if rstapFile is not None:
+		### add staples
+		if astapFile is not None:
 
 			### read geometry file
 			geoFile = simFolds[i] + "restart_geometry.out"
@@ -66,9 +66,9 @@ def main():
 			dbox3 = ars.getDbox3(geoFile)
 			nstrand = max(strands)
 
-			### add reserved staples
-			is_reserved_strand = readRstap(rstapFile, nstrand)
-			points, types = addReservedStap(points, strands, types, is_reserved_strand, r12_eq, sigma, dbox3[0])
+			### add staples
+			is_add_strand = readAstap(astapFile, nstrand)
+			points, types = addStap(points, strands, types, is_add_strand, r12_eq, sigma, dbox3[0])
 			bonds = updateBondTypes(bonds, types)
 
 			### write geometry file
@@ -80,7 +80,7 @@ def main():
 ### File Handlers
 
 ### read old lammps file and write 
-def editInput(lammpsFile, nstep, rstapFile):
+def editInput(lammpsFile, nstep, astapFile):
 
 	### read old lammps file
 	ars.testFileExist(lammpsFile)
@@ -97,7 +97,7 @@ def editInput(lammpsFile, nstep, rstapFile):
 		if content_in[i].startswith("## Geometry"):
 
 			### if adding stales, use geometry
-			if rstapFile is not None:
+			if astapFile is not None:
 				content_out.append("read_data       restart_geometry.in &\n")
 				content_out.append("                extra/bond/per/atom 10 &\n")
 				content_out.append("                extra/angle/per/atom 10 &\n")
@@ -140,26 +140,26 @@ def editInput(lammpsFile, nstep, rstapFile):
 		f.writelines(content_out)
 
 
-### read reserved staple file
-def readRstap(rstapFile, nstrand):
-	is_reserved_strand = [ False for i in range(nstrand) ]
+### read add staple file
+def readAstap(astapFile, nstrand):
+	is_add_strand = [ False for i in range(nstrand) ]
 
-	### read reserved staples file
-	ars.testFileExist(rstapFile,"reserved staples")
-	with open(rstapFile,'r') as f:
-		reserved_strands = [ int(line.strip()) for line in f ]
-	for si in range(len(reserved_strands)):
-		is_reserved_strand[reserved_strands[si]-1] == True
+	### read add staples file
+	ars.testFileExist(astapFile,"add staples")
+	with open(astapFile,'r') as f:
+		add_strands = [ int(line.strip()) for line in f ]
+	for si in range(len(add_strands)):
+		is_add_strand[add_strands[si]-1] = True
 
-	### return strand reservations status
-	return is_reserved_strand
+	### return strand addition status
+	return is_add_strand
 
 
 ################################################################################
 ### Calculation Managers
 
-### edit positions and types for adding reserved staples
-def addReservedStap(r, strands, types, is_reserved_strand, r12_eq, sigma, dbox3):
+### edit positions and types for adding staples
+def addStap(r, strands, types, is_add_strand, r12_eq, sigma, dbox3):
 	print("Initializing positions...")
 
 	### parameters
@@ -167,23 +167,25 @@ def addReservedStap(r, strands, types, is_reserved_strand, r12_eq, sigma, dbox3)
 	max_nfail_bead = 20
 	nbead = sum(strands>0)
 	n_scaf = sum(strands==1)
+	is_active = types!=3
 
 	### initializations
 	nbead_placed = n_scaf
 	nbead_locked = n_scaf
 	nstrand_locked = 1
+	nstrand_placed = 0
 
 	### loop over beads
 	nfail_strand = 0
 	while nbead_placed < nbead:
 		bi = nbead_placed
 
-		### skip if strand is already active
-		if types[bi] != 3:
+		### skip strands that don't need adding
+		if not is_add_strand[strands[bi]-1] or is_active[bi]:
 
 			### warning if trying to add active strand
-			if is_reserved_strand[strands[bi]-1]:
-				print("Flag: reserved staple already added, skipping.")
+			if is_add_strand[strands[bi]-1] and is_active[bi]:
+				print("Flag: skipping the addition of an already active staple.")
 
 			### updates
 			nbead_placed += sum(strands==nstrand_locked+1)
@@ -224,6 +226,7 @@ def addReservedStap(r, strands, types, is_reserved_strand, r12_eq, sigma, dbox3)
 			if bi+1 == nbead or strands[bi] < strands[bi+1]:
 				nbead_locked += sum(strands==nstrand_locked+1)
 				nstrand_locked += 1
+				nstrand_placed += 1
 				nfail_strand = 0
 
 		### reset strand if too much failure
@@ -237,6 +240,7 @@ def addReservedStap(r, strands, types, is_reserved_strand, r12_eq, sigma, dbox3)
 				sys.exit()
 
 	### return positions
+	print(f"Placed {nstrand_placed} staples...")
 	return r, types
 
 

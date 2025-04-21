@@ -37,17 +37,17 @@ def main():
 	if useMyFiles:
 
 		### chose design
-		desID = "16HB2x2x4"
-		simTag = "/resDes08"
+		desID = "16HB2x2x2"
+		simTag = "/resDes16Des08"
 		simType = "production"
-		rstapTag = None
+		rstapTag = "_des16"
 		rseed = 10
 
 		### computational parameters
-		nstep			= 2E8		# steps			- number of simulation steps
+		nstep			= 25E6		# steps			- number of simulation steps
 		nstep_relax		= 1E5		# steps			- number of steps for relaxation
 		dump_every		= 1E4		# steps			- number of steps between positions dumps
-		dbox			= 100		# nm			- periodic boundary diameter
+		dbox			= 60		# nm			- periodic boundary diameter
 
 		### design parameters
 		circularScaf	= True		# bool			- whether the scaffold is circular
@@ -138,7 +138,7 @@ def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, nstep=None, ns
 	param_defaults = {
 		# Files
 		'cadFile':		cadFile,		# str			- name of caDNAno file (required)
-		'rstapFile':	rstapFile,		# str			- name of reserved staples file (required)
+		'rstapFile':	rstapFile,		# str			- name of reserved staples file
 
 		# Computational parameters
 		'nstep': 		nstep,			# steps			- number of simulation steps (required)

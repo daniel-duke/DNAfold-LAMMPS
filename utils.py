@@ -26,7 +26,7 @@ def getSimFolds(copiesFile=None, simFold=None, rseed=1):
 
 
 ### read oxdna configuration
-def readOxDNA(confFile, nba_total):
+def readConf(confFile, nba_total):
 	ars.testFileExist(confFile,"configuration")
 	with open(confFile) as f:
 		content = f.readlines()
@@ -53,7 +53,7 @@ def readTop(topFile):
 
 
 ### read hybridization times file
-def readHybStatus(inHybFile, nstep_max="all"):
+def readHybStatus(inHybFile, nstep_skip=0, coarse_time=1, nstep_max="all"):
 	ars.testFileExist(inHybFile,"hybridization status")
 	with open(inHybFile, 'r') as f:
 		content = f.readlines()
@@ -63,25 +63,44 @@ def readHybStatus(inHybFile, nstep_max="all"):
 	while ars.isnumber(content[nbead+1].split()[0]):
 		nbead += 1
 	nstep_recorded = int(len(content)/(nbead+1))
-	dump_every = int(content[nbead+1].split()[1])
+	nstep_trimmed = int((nstep_recorded-nstep_skip-1)/coarse_time)+1
+	if nstep_trimmed <= 0:
+		print("Error: Cannot read hyb status - too much initial time cut off.")
+		sys.exit()
 
 	### interpret input
 	if isinstance(nstep_max, str) and nstep_max == "all":
-		nstep_used = nstep_recorded
+		nstep_used = nstep_trimmed
 	elif isinstance(nstep_max, int):
-		nstep_used = min([nstep_max,nstep_recorded])
+		nstep_used = min([nstep_max,nstep_trimmed])
 	else:
-		print("Error: Cannot read hyb_status - max number of steps must be \"all\" or integer.")
+		print("Error: Cannot read hyb status - max number of steps must be \"all\" or integer.")
 		sys.exit()
 
 	### read data
 	hyb_status = np.zeros((nstep_used,nbead),dtype=int)
 	for i in range(nstep_used):
 		for j in range(nbead):
-			hyb_status[i,j] = int(content[i*(nbead+1)+j+1].split()[1])
+			hyb_status[i,j] = int(content[(nbead+1)*(nstep_skip+i*coarse_time)+1+j].split()[1])
 
 	### results
-	return hyb_status, dump_every
+	return hyb_status
+
+
+### extract dump frequency from hyb status file
+def getDumpEveryHyb(inHybFile):
+	ars.testFileExist(inHybFile,"hybridization status")
+	with open(inHybFile, 'r') as f:
+		content = f.readlines()
+
+	### extract metadata
+	nbead = 0
+	while ars.isnumber(content[nbead+1].split()[0]):
+		nbead += 1
+	dump_every = int(content[nbead+1].split()[1])
+
+	### results
+	return dump_every
 
 
 ### prepare basic DNAfold ovito scene
@@ -209,7 +228,7 @@ def initPositionsOxDNA(cadFile, topFile, confFile):
 			break
 
 	### read configuration
-	coms, a1s, dbox3 = readOxDNA(confFile, nba_total)
+	coms, a1s, dbox3 = readConf(confFile, nba_total)
 
 	### get oxDNA scaffold positions
 	r = np.zeros((n_ori,3))
