@@ -12,10 +12,12 @@ import sys
 ### File Handlers
 
 ### get simulation folders
-def getSimFolds(copiesFile=None, simFold=None, rseed=1):
+def getSimFolds(copiesFile=None, simFold=None, rseed=None):
 	if copiesFile is not None:
 		copyNames, nsim = ars.readCopies(copiesFile)
 		simFolds = [ copyNames[i] + "/" for i in range(nsim) ]
+		if simFold is not None:
+			print("Flag: both simFold and copieFile defined, using copiesFile only.")
 	else:
 		nsim = 1
 		if simFold is not None:
@@ -52,16 +54,21 @@ def readTop(topFile):
 	return strands, nba_total
 
 
-### read hybridization times file
-def readHybStatus(inHybFile, nstep_skip=0, coarse_time=1, nstep_max="all"):
-	ars.testFileExist(inHybFile,"hybridization status")
-	with open(inHybFile, 'r') as f:
+### read hybridization status file
+def readHybStatus(hybFile, nstep_skip=0, coarse_time=1, nstep_max="all"):
+
+	### load hyb status file
+	print("Loading hybridization status...")
+	ars.testFileExist(hybFile,"hybridization status")
+	with open(hybFile, 'r') as f:
 		content = f.readlines()
+	print("Parsing hybridization status...")
 
 	### extract metadata
 	nbead = 0
 	while ars.isnumber(content[nbead+1].split()[0]):
 		nbead += 1
+	dump_every = int(content[nbead+1].split()[1])
 	nstep_recorded = int(len(content)/(nbead+1))
 	nstep_trimmed = int((nstep_recorded-nstep_skip-1)/coarse_time)+1
 	if nstep_trimmed <= 0:
@@ -77,6 +84,11 @@ def readHybStatus(inHybFile, nstep_skip=0, coarse_time=1, nstep_max="all"):
 		print("Error: Cannot read hyb status - max number of steps must be \"all\" or integer.")
 		sys.exit()
 
+	### report step counts
+	print("{:1.2e} steps in simulation".format(nstep_recorded*dump_every))
+	print("{:1.2e} steps recorded".format(nstep_recorded))
+	print("{:1.2e} steps used".format(nstep_used))
+
 	### read data
 	hyb_status = np.zeros((nstep_used,nbead),dtype=int)
 	for i in range(nstep_used):
@@ -88,9 +100,9 @@ def readHybStatus(inHybFile, nstep_skip=0, coarse_time=1, nstep_max="all"):
 
 
 ### extract dump frequency from hyb status file
-def getDumpEveryHyb(inHybFile):
-	ars.testFileExist(inHybFile,"hybridization status")
-	with open(inHybFile, 'r') as f:
+def getDumpEveryHyb(hybFile):
+	ars.testFileExist(hybFile,"hybridization status")
+	with open(hybFile, 'r') as f:
 		content = f.readlines()
 
 	### extract metadata

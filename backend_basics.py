@@ -39,7 +39,8 @@ def main():
 	parser.add_argument('--copiesFile',		type=str,	default=None,	help='name of copies file, which contains a list of simulation folders')	
 	parser.add_argument('--simFold',		type=str,	default=None,	help='name of simulation folder, should exist within current directory')
 	parser.add_argument('--rseed',			type=int,	default=1,		help='random seed, used to find simFold if necessary')
-	parser.add_argument('--nstep_skip',		type=int,	default=0,		help='number of recorded initial steps to skip')
+	parser.add_argument('--nstep_skip',		type=float,	default=0,		help='number of recorded initial steps to skip')
+	parser.add_argument('--nstep_max',		type=float,	default=0,		help='max number of recorded steps to use (0 for all)')
 	parser.add_argument('--coarse_time',	type=int,	default=1,		help='coarse factor for time steps')
 
 	### analysis options
@@ -54,8 +55,13 @@ def main():
 	copiesFile = args.copiesFile
 	simFold = args.simFold
 	rseed = args.rseed
-	nstep_skip = args.nstep_skip
+	nstep_skip = int(args.nstep_skip)
+	nstep_max = int(args.nstep_max)
 	coarse_time = args.coarse_time
+
+	### interpret input
+	if nstep_max == 0:
+		nstep_max = "all"
 
 
 ################################################################################
@@ -77,7 +83,7 @@ def main():
 	### assemble data params
 	params = []
 	for i in range(nsim):
-		params.append((simFolds[i], strands, bonds_backbone, complements, nstep_skip, coarse_time, center, unwrap, set_color, bicolor, r12_cut_hyb))
+		params.append((simFolds[i], strands, bonds_backbone, complements, nstep_skip, nstep_max, coarse_time, center, unwrap, set_color, bicolor, r12_cut_hyb))
 
 	### run in parallel if multiple simulations
 	if nsim == 1:
@@ -89,7 +95,7 @@ def main():
 
 
 ### body of main function
-def submain(simFold, strands, bonds_backbone, complements, nstep_skip, coarse_time, center, unwrap, set_color, bicolor, r12_cut_hyb):
+def submain(simFold, strands, bonds_backbone, complements, nstep_skip, nstep_max, coarse_time, center, unwrap, set_color, bicolor, r12_cut_hyb):
 
 	### input files
 	datFile = simFold + "trajectory.dat"
@@ -104,7 +110,7 @@ def submain(simFold, strands, bonds_backbone, complements, nstep_skip, coarse_ti
 	ars.createSafeFold(outFold)
 
 	### trajectory centering
-	points, strands, dbox = ars.readAtomDump(datFile, nstep_skip, coarse_time)
+	points, strands, dbox = ars.readAtomDump(datFile, nstep_skip, coarse_time, nstep_max=nstep_max);
 	dump_every = ars.getDumpEvery(datFile)*coarse_time
 	points_centered = ars.centerPointsMolecule(points, strands, dbox, center, unwrap)
 	colors = np.minimum(2,strands) if bicolor else strands
@@ -223,3 +229,4 @@ def calcHybStatus(points, complements, dbox, r12_cut_hyb):
 ### run the script
 if __name__ == "__main__":
 	main()
+	print()

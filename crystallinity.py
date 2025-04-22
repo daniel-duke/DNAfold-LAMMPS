@@ -23,14 +23,15 @@ def main():
 
 	### get arguments
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--copiesFile',		type=str,	default=None,		help='name of copies file, which contains a list of simulation folders')	
-	parser.add_argument('--simFold',		type=str,	default=None,		help='name of simulation folder, should exist within current directory')
-	parser.add_argument('--rseed',			type=int,	default=1,			help='random seed, used to find simFold if necessary')
-	parser.add_argument('--clusterFile',	type=str,	default=None,		help='name of cluster file, ')	
-	parser.add_argument('--loadResults',	type=bool,	default=False,		help='whether to load the results from a pickle file')
-	parser.add_argument('--nstep_skip',		type=int,	default=0,			help='if not loading results, number of recorded initial steps to skip')
-	parser.add_argument('--coarse_time',	type=int,	default=1,			help='if not loading results, coarse factor for time steps')
-	parser.add_argument('--mov_avg_stride',	type=int,	default=1,			help='if not loading results, stride length for moving average')
+	parser.add_argument('--copiesFile',		type=str,	default=None,	help='name of copies file, which contains a list of simulation folders')	
+	parser.add_argument('--simFold',		type=str,	default=None,	help='name of simulation folder, should exist within current directory')
+	parser.add_argument('--rseed',			type=int,	default=1,		help='random seed, used to find simFold if necessary')
+	parser.add_argument('--clusterFile',	type=str,	default=None,	help='name of cluster file, ')	
+	parser.add_argument('--loadResults',	type=bool,	default=False,	help='whether to load the results from a pickle file')
+	parser.add_argument('--nstep_skip',		type=float,	default=0,		help='if not loading results, number of recorded initial steps to skip')
+	parser.add_argument('--nstep_max',		type=float,	default=0,		help='max number of recorded steps to use (0 for all)')
+	parser.add_argument('--coarse_time',	type=int,	default=1,		help='if not loading results, coarse factor for time steps')
+	parser.add_argument('--mov_avg_stride',	type=int,	default=1,		help='if not loading results, stride length for moving average')
 
 	### set arguments
 	args = parser.parse_args()
@@ -39,7 +40,8 @@ def main():
 	rseed = args.rseed
 	clusterFile = args.clusterFile
 	loadResults = args.loadResults
-	nstep_skip = args.nstep_skip
+	nstep_skip = int(args.nstep_skip)
+	nstep_max = int(args.nstep_max)
 	coarse_time = args.coarse_time
 	mov_avg_stride = args.mov_avg_stride
 
@@ -70,6 +72,7 @@ def main():
 			datFile = simFolds[i] + "analysis/trajectory_centered.dat"
 			nstep_allSim[i] = ars.getNstep(datFile, nstep_skip, coarse_time)
 		nstep_min = int(min(nstep_allSim))
+		nstep_use = nstep_min if nstep_max == 0 else min([nstep_min,nstep_max])
 
 		### get trajectory dump frequency
 		datFile = simFolds[0] + "analysis/trajectory_centered.dat"
@@ -80,12 +83,12 @@ def main():
 			bdis = list(range(1,n_scaf+1))
 
 			### loop through simulations
-			S_allSim = np.zeros((nsim,nstep_min))
+			S_allSim = np.zeros((nsim,nstep_use))
 			for i in range(nsim):
 
 				### calculate crustallinity
 				datFile = simFolds[i] + "analysis/trajectory_centered.dat"
-				points, _, dbox = ars.readAtomDump(datFile, nstep_skip, coarse_time, bdis=bdis, nstep_max=nstep_min); print("")
+				points, _, dbox = ars.readAtomDump(datFile, nstep_skip, coarse_time, bdis=bdis, nstep_max=nstep_use); print()
 				S = utils.calcCrystallinity(points, dbox)
 				S_allSim[i] = ars.movingAvg(S, mov_avg_stride)
 
@@ -96,11 +99,11 @@ def main():
 
 			### read trajectory
 			datFile = simFolds[0] + "analysis/trajectory_centered.dat"
-			points, _, dbox, molecules = ars.readAtomDump(datFile, nstep_skip, coarse_time, bdis=bdis, nstep_max=nstep_min); print("")
+			points, _, dbox, molecules = ars.readAtomDump(datFile, nstep_skip, coarse_time, bdis=bdis, nstep_max=nstep_use); print()
 			points = ars.sortPointsByMolecule(points, molecules)
 
 			### loop through clusters
-			S_allSim = np.zeros((ncluster,nstep_min))
+			S_allSim = np.zeros((ncluster,nstep_use))
 			for i in range(ncluster):
 
 				### calculate crustallinity
@@ -175,4 +178,5 @@ def plotCrystallinity(S_allSim, dump_every):
 ### run the script
 if __name__ == "__main__":
 	main()
+	print()
 

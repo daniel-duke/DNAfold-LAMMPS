@@ -38,16 +38,17 @@ def main():
 
 		### chose design
 		desID = "16HB2x2x2"
-		simTag = "/resDes16Des08"
-		simType = "production"
-		rstapTag = "_des16"
-		rseed = 10
+		simTag = ""
+		simType = "experiment"
+		rstapTag = None
+		rseed = 1
 
 		### computational parameters
-		nstep			= 25E6		# steps			- number of simulation steps
+		nstep			= 1E7		# steps			- number of simulation steps
 		nstep_relax		= 1E5		# steps			- number of steps for relaxation
 		dump_every		= 1E4		# steps			- number of steps between positions dumps
-		dbox			= 60		# nm			- periodic boundary diameter
+		dbox			= 100		# nm			- periodic boundary diameter
+		forceBind		= False		# bool			- whether to force hybridization
 
 		### design parameters
 		circularScaf	= True		# bool			- whether the scaffold is circular
@@ -129,7 +130,7 @@ def main():
 ### File Handlers
 
 ### read input file
-def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, nstep=None, nstep_relax=1E5, dump_every=1E4, dbox=100, circularScaf=True, stap_copies=1):
+def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, nstep=None, nstep_relax=1E5, dump_every=1E4, dbox=100, forceBind=False, circularScaf=True, stap_copies=1):
 
 	### list keys that can have 'None' as their final value
 	allow_none_default = {'rstapFile'}
@@ -146,7 +147,7 @@ def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, nstep=None, ns
 		'dump_every': 	dump_every,		# steps			- number of steps between positions dumps
 		'dt': 			0.01,			# ns			- integration time step
 		'dbox': 		dbox,			# nm			- periodic boundary diameter
-		'forceBind': 	False,			# bool			- whether to force hybridization (not applied if >1 staple copies)
+		'forceBind': 	forceBind,		# bool			- whether to force hybridization (not applied if >1 staple copies)
 		'dehyb': 		True,			# bool			- whether to include dehybridization reactions (unnecessary for 1 staple copy)
 		'debug': 		False,			# bool			- whether to include debugging output
 
@@ -433,7 +434,7 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle
 	react_every_angle_dehyb	= 1E2	# steps		- how often to check for removed hybridization angles
 
 	### bond file calculations
-	r12_max = np.sqrt(3)*p.dbox/2
+	r12_max = np.sqrt(3)*p.dbox
 	r12_max = r12_max - r12_max%bond_res + bond_res
 	npoint_bond = int(r12_max/bond_res+1)
 
@@ -542,7 +543,7 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle
 				"## Reactions\n")
 
 			### bond dehybridization reactions
-			if p.dehyb:
+			if p.dehyb and not p.forceBind:
 				f.write(
 			   f"fix             bondDehyb all bond/break {int(react_every_bond)} 2 {r12_cut_react_bond:.1f}\n")
 
@@ -856,12 +857,12 @@ def writeReactBond(outSimFold, backbone_neighbors, complements, is_crossover, p)
 
 		if p.debug:
 			if ri == 0:
-				print("")
+				print()
 			print(f"Bond template {ri+1} (hybridization):")
 			print(atoms_all[ri])
 			print(bonds_all[ri])
 			print(edges_all[ri])
-			print("")
+			print()
 
 		molPreFile = f"{outReactFold}bondHyb{ri+1:0>{len_nreact}}_mol_pre.txt"
 		with open(molPreFile, 'w') as f:
@@ -1267,6 +1268,8 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 	len_nreact_hyb = len(str(nreact_hyb))
 	len_nreact_dehyb = len(str(nreact_dehyb))
 	outReactFold = outSimFold + "react/"
+	if p.forceBind:
+		ars.createEmptyFold(outReactFold)		
 
 	for ri in range(nreact_hyb):
 
@@ -1276,14 +1279,12 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 		nedge = len(edges_all_hyb[ri])
 
 		if p.debug:
-			if ri == 0:
-				print("")
 			print(f"Angle template {ri+1} (hybridization):")
 			print(atoms_all_hyb[ri])
 			print(bonds_all_hyb[ri])
 			print(angles_all_hyb[ri])
 			print(edges_all_hyb[ri])
-			print("")
+			print()
 
 		molFile = f"{outReactFold}angleHyb{ri+1:0>{len_nreact_hyb}}_mol_pre.txt"
 		with open(molFile, 'w') as f:
@@ -1423,7 +1424,7 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 			print(bonds_all_dehyb[ri])
 			print(angles_all_dehyb[ri])
 			print(edges_all_dehyb[ri])
-			print("")
+			print()
 
 		molFile = f"{outReactFold}angleDehyb{ri+1:0>{len_nreact_dehyb}}_mol.txt"
 		with open(molFile, 'w') as f:
@@ -1957,4 +1958,5 @@ def find(strand, index, list):
 ### run the script
 if __name__ == "__main__":
 	main()
+	print()
 

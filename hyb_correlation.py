@@ -44,11 +44,12 @@ def main():
 	parser.add_argument('--copiesFile',		type=str,	required=True,		help='name of copies file, which contains a list of simulation folders')	
 	parser.add_argument('--topFile',		type=str, 	default=None,		help='if using oxdna positions, name of topology file')
 	parser.add_argument('--confFile',		type=str, 	default=None,		help='if using oxdna positions, name of conformation file')
-	parser.add_argument('--corrVar',		type=str,	default="final_S",	help='hat to correlate with the strands (values: final_S, final_n_hyb)')
-	parser.add_argument('--corrType',		type=str,	default="hyb_last",	help='how to average correlation across strand (values: hyb_avg, hyb_first, hyb_last, corr_avg, corr_max')
-	parser.add_argument('--reportValues',	type=str,	default="none",		help='what staple results to report (values: none, staple, corr, all')
+	parser.add_argument('--corr_var',		type=str,	default="final_S",	help='hat to correlate with the strands (values: final_S, final_n_hyb)')
+	parser.add_argument('--corr_type',		type=str,	default="hyb_last",	help='how to average correlation across strand (values: hyb_avg, hyb_first, hyb_last, corr_avg, corr_max')
+	parser.add_argument('--values_report',	type=str,	default="none",		help='what staple results to report (values: none, staple, corr, all')
 	parser.add_argument('--loadResults',	type=bool,	default=False,		help='whether to load the results from a pickle file')
-	parser.add_argument('--nstep_skip',		type=int,	default=0,			help='if not loading results, number of recorded initial steps to skip')
+	parser.add_argument('--nstep_skip',		type=float,	default=0,			help='if not loading results, number of recorded initial steps to skip')
+	parser.add_argument('--nstep_max',		type=float,	default=0,			help='max number of recorded steps to use (0 for all)')
 	parser.add_argument('--coarse_time',	type=int,	default=1,			help='if not loading results, coarse factor for time steps')
 	parser.add_argument('--mov_avg_stride',	type=int,	default=1,			help='if not loading results, stride length for moving average')
 
@@ -58,11 +59,12 @@ def main():
 	copiesFile = args.copiesFile
 	topFile = args.topFile
 	confFile = args.confFile
-	corrVar = args.corrVar
-	corrType = args.corrType
-	reportValues = args.reportValues
+	corr_var = args.corr_var
+	corr_type = args.corr_type
+	values_report = args.values_report
 	loadResults = args.loadResults
-	nstep_skip = args.nstep_skip
+	nstep_skip = int(args.nstep_skip)
+	nstep_max = int(args.nstep_max)
 	coarse_time = args.coarse_time
 	mov_avg_stride = args.mov_avg_stride
 
@@ -98,16 +100,17 @@ def main():
 			datFile = simFolds[i] + "analysis/trajectory_centered.dat"
 			nstep_allSim[i] = ars.getNstep(datFile, nstep_skip, coarse_time)
 		nstep_min = int(min(nstep_allSim))
+		nstep_use = nstep_min if nstep_max == 0 else min([nstep_min,nstep_max])
 
 		### loop through simulations
 		first_hyb_times_scaled_allSim = np.zeros((nsim,n_scaf))
-		n_hyb_frac_allSim = np.zeros((nsim,nstep_min))
-		S_allSim = np.zeros((nsim,nstep_min))
+		n_hyb_frac_allSim = np.zeros((nsim,nstep_use))
+		S_allSim = np.zeros((nsim,nstep_use))
 		for i in range(nsim):
 
 			### calculate hyb times
 			hybFile = simFolds[i] + "analysis/hyb_status.dat"
-			hyb_status = utils.readHybStatus(hybFile, nstep_skip, coarse_time, nstep_min)
+			hyb_status = utils.readHybStatus(hybFile, nstep_skip, coarse_time, nstep_use)
 			dump_every = utils.getDumpEveryHyb(hybFile)*coarse_time
 			first_hyb_times_scaled_allSim[i] = utils.calcFirstHybTimes(hyb_status, complements, n_scaf, dump_every)[1]
 			n_hyb_frac_allSim[i] = np.sum(hyb_status==1,axis=1)/nbead
@@ -115,7 +118,7 @@ def main():
 			### calculate crystallinity
 			datFile = simFolds[i] + "analysis/trajectory_centered.dat"
 			bdis_scaf = list(range(1,n_scaf+1))
-			points, _, dbox = ars.readAtomDump(datFile, nstep_skip, coarse_time, bdis=bdis_scaf, nstep_max=nstep_min); print("")
+			points, _, dbox = ars.readAtomDump(datFile, nstep_skip, coarse_time, bdis=bdis_scaf, nstep_max=nstep_use); print()
 			S = utils.calcCrystallinity(points, dbox)
 			S_allSim[i] = ars.movingAvg(S, mov_avg_stride)
 
@@ -136,16 +139,16 @@ def main():
 ### Results
 
 	### select product quality variable for hybridization correlation
-	if corrVar == "final_n_hyb":
+	if corr_var == "final_n_hyb":
 		product_quality = n_hyb_frac_allSim[:,-1]
-	elif corrVar == "final_S":
+	elif corr_var == "final_S":
 		product_quality =  S_allSim[:,-1]
 	else:
 		print("Error: Unknown correlation variable.")
 		sys.exit()
 
 	### calculate and visualize correlation
-	hybCorr, hybCorr_strand = calcHybCorr(first_hyb_times_scaled_allSim, product_quality, strands, complements, corrType)
+	hybCorr, hybCorr_strand = calcHybCorr(first_hyb_times_scaled_allSim, product_quality, strands, complements, corr_type)
 
 	### prepare position data
 	if position_src == "cadnano":
@@ -164,15 +167,15 @@ def main():
 	staple_labels = np.arange(2,max(strands)+1)
 	sorted_results = sorted(zip(hybCorr_strand[1:],staple_labels), reverse=True)
 	for corr, s in sorted_results:
-		if reportValues == "staple":
+		if values_report == "staple":
 			print(f"{s:2.0f}")
-		if reportValues == "corr":
+		if values_report == "corr":
 			print(f"{corr:0.4f}")
-		if reportValues == "all":
+		if values_report == "all":
 			print(f"Strand {s:2.0f}: {corr:0.4f}")
 
 	### correlation statistics
-	plotCorrHist(first_hyb_times_scaled_allSim, product_quality, strands, complements, corrType)
+	plotCorrHist(first_hyb_times_scaled_allSim, product_quality, strands, complements, corr_type)
 	plt.show()
 
 
@@ -180,10 +183,10 @@ def main():
 ### Plotters
 
 ### plot histogram of hybridization correlations
-def plotCorrHist(first_hyb_times_scaled_allSim, product_quality, strands, complements, corrType):
+def plotCorrHist(first_hyb_times_scaled_allSim, product_quality, strands, complements, corr_type):
 
 	### actual correlation
-	hybCorr_strand = calcHybCorr(first_hyb_times_scaled_allSim, product_quality, strands, complements, corrType)[1]
+	hybCorr_strand = calcHybCorr(first_hyb_times_scaled_allSim, product_quality, strands, complements, corr_type)[1]
 
 	### random correlation
 	nrand = 100
@@ -192,7 +195,7 @@ def plotCorrHist(first_hyb_times_scaled_allSim, product_quality, strands, comple
 	for i in range(nrand):
 		rng = np.random.default_rng()
 		rng.shuffle(product_quality)
-		hybCorr_strand_rand[i] = calcHybCorr(first_hyb_times_scaled_allSim, product_quality, strands, complements, corrType)[1]
+		hybCorr_strand_rand[i] = calcHybCorr(first_hyb_times_scaled_allSim, product_quality, strands, complements, corr_type)[1]
 	hybCorr_strand_rand = hybCorr_strand_rand.reshape(nrand*nstrand)
 
 	### plot
@@ -235,7 +238,7 @@ def writeOvito(ovitoFile, outGeoFile):
 ### Calculation Managers
 
 ### calculate correlation between hybridization times (h) and product quality (q)
-def calcHybCorr(h, q, strands, complements, corrType):
+def calcHybCorr(h, q, strands, complements, corr_type):
 	nsim = h.shape[0]
 	n_scaf = h.shape[1]
 	nstrand = max(strands)
@@ -247,7 +250,7 @@ def calcHybCorr(h, q, strands, complements, corrType):
 			corr[bi] = np.corrcoef(h[:,bi],q)[0,1]
 
 	### group correlation by strands, pre-correlation methods
-	if corrType == "hyb_avg" or corrType == "hyb_first" or corrType == "hyb_last":
+	if corr_type == "hyb_avg" or corr_type == "hyb_first" or corr_type == "hyb_last":
 		h_grouped = [ np.zeros((nsim,0)) for i in range(nstrand) ]
 		h_grouped[0] = np.zeros((nsim,1))
 		for bi in range(n_scaf):
@@ -258,26 +261,26 @@ def calcHybCorr(h, q, strands, complements, corrType):
 				h_grouped[strand-1] = np.concatenate((A,B),axis=1)
 		corr_strand = np.zeros(nstrand)
 		for si in range(1,nstrand):
-			if corrType == "hyb_avg":
+			if corr_type == "hyb_avg":
 				h_singleStrand = np.mean(h_grouped[si],axis=1)
-			elif corrType == "hyb_first":
+			elif corr_type == "hyb_first":
 				h_singleStrand = np.min(h_grouped[si],axis=1)
-			elif corrType == "hyb_last":
+			elif corr_type == "hyb_last":
 				h_singleStrand = np.max(h_grouped[si],axis=1)
 			if len(set(h_singleStrand)) != 1:
 				corr_strand[si] = np.corrcoef(h_singleStrand,q)[0,1]
 
 	### group correlation by strands, post-correlation methods
-	elif corrType == "corr_avg" or corrType == "corr_max":
+	elif corr_type == "corr_avg" or corr_type == "corr_max":
 		corr_grouped = [ [] for si in range(nstrand) ]
 		corr_grouped[0] = [0]
 		for bi in range(n_scaf):
 			if len(complements[bi]) > 0:
 				strand = strands[complements[bi][0]-1]
 				corr_grouped[strand-1].append(corr[bi])
-		if corrType == "corr_avg":
+		if corr_type == "corr_avg":
 			corr_strand = np.array([ np.mean(corr_grouped[si]) for si in range(nstrand) ])
-		elif corrType == "corr_max":
+		elif corr_type == "corr_max":
 			corr_strand = np.zeros(nstrand)
 			for si in range(nstrand):
 				if all(c > 0 for c in corr_grouped[si]):
@@ -321,4 +324,5 @@ def prepGeoData(r, strands, complements, hybCorr, hybCorr_strand):
 ### run the script
 if __name__ == "__main__":
 	main()
+	print()
 

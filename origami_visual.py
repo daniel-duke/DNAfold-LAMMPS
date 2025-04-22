@@ -56,11 +56,11 @@ def main():
 
 		### get arguments
 		parser = argparse.ArgumentParser()
-		parser.add_argument('--cadFile',		type=str,	required=True,		help='name of caDNAno file')
-		parser.add_argument('--topFile',		type=str, 	default=None,		help='if using oxdna positions, name of topology file')
-		parser.add_argument('--confFile',		type=str, 	default=None,		help='if using oxdna positions, name of conformation file')
-		parser.add_argument('--rstapFile',		type=str, 	default=None,		help='if reserving staples, name of reserved staples file')
-		parser.add_argument('--circularScaf',	type=bool,	default=True,		help='whether to add bond between scaffold ends (boolean)')
+		parser.add_argument('--cadFile',		type=str,	required=True,	help='name of caDNAno file')
+		parser.add_argument('--topFile',		type=str, 	default=None,	help='if using oxdna positions, name of topology file')
+		parser.add_argument('--confFile',		type=str, 	default=None,	help='if using oxdna positions, name of conformation file')
+		parser.add_argument('--rstapFile',		type=str, 	default=None,	help='if reserving staples, name of reserved staples file')
+		parser.add_argument('--circularScaf',	type=bool,	default=True,	help='whether to add bond between scaffold ends (boolean)')
 
 		### set arguments
 		args = parser.parse_args()
@@ -198,4 +198,5 @@ def prepGeoData(r, strands, reserved_strands, circularScaf):
 ### run the script
 if __name__ == "__main__":
 	main()
+	print()
 

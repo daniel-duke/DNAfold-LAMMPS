@@ -20,14 +20,16 @@ def main():
 
 	### get arguments
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--copiesFile',		type=str,	required=True,		help='name of copies file, which contains a list of simulation folders')	
-	parser.add_argument('--nstep_skip',		type=int,	default=0,			help='number of recorded initial steps to skip')
-	parser.add_argument('--coarse_time',	type=int,	default=1,			help='coarse factor for time steps')
+	parser.add_argument('--copiesFile',		type=str,	required=True,	help='name of copies file, which contains a list of simulation folders')	
+	parser.add_argument('--nstep_skip',		type=float,	default=0,		help='number of recorded initial steps to skip')
+	parser.add_argument('--nstep_max',		type=float,	default=0,		help='max number of recorded steps to use (0 for all)')
+	parser.add_argument('--coarse_time',	type=int,	default=1,		help='coarse factor for time steps')
 
 	### set arguments
 	args = parser.parse_args()
 	copiesFile = args.copiesFile
-	nstep_skip = args.nstep_skip
+	nstep_skip = int(args.nstep_skip)
+	nstep_max = int(args.nstep_max)
 	coarse_time = args.coarse_time
 
 	### get simulation folders
@@ -49,21 +51,23 @@ def main():
 		datFile = simFolds[i] + "analysis/trajectory_centered.dat"
 		nstep_allSim[i] = ars.getNstep(datFile, nstep_skip, coarse_time)
 	nstep_min = int(min(nstep_allSim))
+	nstep_use = nstep_min if nstep_max == 0 else min([nstep_min,nstep_max])
 
 	### get hybridization dump frequency
 	hybFile = simFolds[0] + "analysis/hyb_status.dat"
 	dump_every = utils.getDumpEveryHyb(hybFile)
 
 	### loop over simulations
-	hyb_status_allSim = np.zeros((nsim,nstep_min,nbead))
+	hyb_status_allSim = np.zeros((nsim,nstep_use,nbead))
 	for i in range(nsim):
 
 		### analyze hybridizations
 		hybFile = simFolds[i] + "analysis/hyb_status.dat"
-		hyb_status_allSim[i] = utils.readHybStatus(hybFile, nstep_skip, coarse_time, nstep_min)
+		hyb_status_allSim[i] = utils.readHybStatus(hybFile, nstep_skip, coarse_time, nstep_use); print()
 
 	### analyze kinetics
 	plotKinetics(hyb_status_allSim, strands, n_scaf, dump_every)
+	plotNhyb(hyb_status_allSim, n_scaf, dump_every)
 	plt.show()
 
 
@@ -103,9 +107,41 @@ def plotKinetics(hyb_status_allSim, strands, n_scaf, dump_every):
 	plt.xlabel("Time [s]")
 	plt.ylabel("$\\ln(C/C_0)$")
 	plt.title("Free Staple Kinetics")
+	plt.legend(['Mean','SEM'])
+
+
+### plot number of hybridizations
+def plotNhyb(hyb_status_allSim, n_scaf, dump_every):
+
+	### calculate free staple concentrations
+	nsim = hyb_status_allSim.shape[0]
+	nstep = hyb_status_allSim.shape[1]
+	n_hyb_avg = np.zeros(nstep)
+	n_hyb_sem = np.zeros(nstep)
+	for i in range(nstep):
+		n_hyb_indiv = np.sum(hyb_status_allSim[:,i,:n_scaf]==1,axis=1)
+		n_hyb_avg[i] = np.mean(n_hyb_indiv)
+		n_hyb_sem[i] = ars.calcSEM(n_hyb_indiv)
+
+	### calculate time
+	dt = 0.01
+	scale = 5200
+	time = np.arange(nstep)*dump_every*dt*scale*1E-9
+
+	### plot
+	ars.magicPlot()
+	plt.figure("Hyb",figsize=(8,6))
+	plt.plot(time,n_hyb_avg)
+	plt.fill_between(time,n_hyb_avg-n_hyb_sem,n_hyb_avg+n_hyb_sem,alpha=0.3)
+	plt.axhline(y=n_scaf,color='k',linestyle='--')
+	plt.xlabel("Time [s]")
+	plt.ylabel("N\\textsubscript{hyb}")
+	plt.title("Number of Scaffold Hybridizations")
+	plt.legend(['Mean','SEM','N\\textsubscript{scaffold}'])
 
 
 ### run the script
 if __name__ == "__main__":
 	main()
+	print()
 

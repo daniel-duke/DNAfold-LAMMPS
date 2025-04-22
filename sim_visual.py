@@ -26,9 +26,9 @@ def main():
 
 	### get arguments
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--copiesFile',		type=str,	default=None,	help='name of copies file, which contains a list of simulation folders')	
-	parser.add_argument('--simFold',		type=str,	default=None,	help='name of simulation folder, should exist within current directory')
-	parser.add_argument('--rseed',			type=int,	default=1,		help='random seed, used to find simFold if necessary')
+	parser.add_argument('--copiesFile',	type=str,	default=None,	help='name of copies file, which contains a list of simulation folders')	
+	parser.add_argument('--simFold',	type=str,	default=None,	help='name of simulation folder, should exist within current directory')
+	parser.add_argument('--rseed',		type=int,	default=1,		help='random seed, used to find simFold if necessary')
 
 	### set arguments
 	args = parser.parse_args()
@@ -89,4 +89,5 @@ def main():
 ### run the script
 if __name__ == "__main__":
 	main()
+	print()
 

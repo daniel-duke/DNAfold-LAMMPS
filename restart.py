@@ -256,3 +256,5 @@ def updateBondTypes(bonds, types):
 ### run the script
 if __name__ == "__main__":
 	main()
+	print()
+
