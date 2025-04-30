@@ -20,10 +20,14 @@ import os
   # (starting from 1) paired to the staples to reserve; the code uses reserved
   # staple files by default, but it can use reserved scaffold if neccessary.
 
-# To Do
+# To Do (general)
 # add blocking cases for angle template that arise from using multiple staple
   # copies, parameterize 90 degree angular potential, reactions that shorten
   # crossover bond length
+
+# To Do (for parallel)
+# find optimal tradeoff between commuication cutoff and bond break, get linear
+  # scaffold working with no dummy bonds
 
 
 ################################################################################
@@ -42,7 +46,7 @@ def main():
 		simTag = ""
 		simType = "experiment"
 		rstapTag = ""
-		rseed = 3
+		rseed = 4
 
 		### choose parameters
 		nstep			= 5E6		# steps		- number of simulation steps
@@ -158,7 +162,7 @@ def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, nstep=None, ns
 		'r12_eq':		2.72,			# nm			- equilibrium bead separation
 		'k_x': 			120.0,			# kcal/mol/nm2	- backbone spring constant (standard definition)
 		'r12_cut_hyb':	2.0,			# nm			- hybridization potential cutoff radius
-		'U_hyb':		8.0,			# kcal/mol		- depth of hybridization potential
+		'U_hyb':		10.0,			# kcal/mol		- depth of hybridization potential
 		'dsLp': 		50.0			# nm			- persistence length of dsDNA
 	}
 
@@ -270,41 +274,38 @@ def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossove
 		r[p.n_scaf:] += stap_offset
 	else:
 		r = initPositions(strands, p)
-	r = np.append(r,np.zeros((p.n_scaf,3)),axis=0)
+	r = np.append(r,np.zeros((1,3)),axis=0)
 
 	### initialize
-	molecules = np.ones(p.nbead+p.n_scaf,dtype=int)
-	types = np.ones(p.nbead+p.n_scaf,dtype=int)
-	charges = np.zeros(p.nbead+p.n_scaf)
+	molecules = np.ones(p.nbead+1,dtype=int)
+	types = np.ones(p.nbead+1,dtype=int)
+	charges = np.zeros(p.nbead+1)
 	bonds = np.zeros((0,3),dtype=int)
 	angles = np.zeros((0,4),dtype=int)
 
 	### scaffold atoms
-	charge_step = 1/(10**len(str(p.n_scaf)))
 	for bi in range(p.n_scaf):
-		charges[bi] = charge_step*(bi+1)
+		molecules[bi] = bi + 1
+		charges[bi] = is_crossover[bi] + 1
 
 	### staple atoms
 	nhyb = 0
 	for ci in range(p.stap_copies):
 		for obi in range(p.n_scaf,p.n_ori):
 			rbi = obi + ci*p.n_stap
-			molecules[rbi] = strands[obi] + ci*(p.nstrand-1) + 1
+			molecules[rbi] = complements[obi] + 1
 			types[rbi] = 2
 			if complements[obi] != -1:
 				if ci == 0:
 					nhyb += 1
-				charges[rbi] = charge_step*(complements[obi]+1)
+				charges[rbi] = strands[obi] + ci*(p.nstrand-1) + 1
 			if is_reserved_strand[strands[obi]]:
 				types[rbi] = 3
 				r[rbi] = [0,0,0]
 
-	### dummy atoms
-	for sbi in range(p.n_scaf):
-		dbi = sbi + p.nbead
-		molecules[dbi] = 0
-		types[dbi] = 3
-		charges[dbi] = is_crossover[sbi] + 1
+	### dummy atom
+	molecules[p.nbead] = 0
+	types[p.nbead] = 3
 
 	### scaffold backbone bonds
 	for bi in range(p.n_scaf-1):
@@ -319,8 +320,6 @@ def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossove
 	else:
 		if getScafNeighbors(0,backbone_neighbors,complements)[0] == p.n_scaf-1:
 			bonds = np.append(bonds,[[3,1,p.n_scaf]],axis=0)
-			bonds = np.append(bonds,[[3,1,p.n_scaf+p.nbead]],axis=0)
-			bonds = np.append(bonds,[[3,p.n_scaf,1+p.nbead]],axis=0)
 
 	### staple backbone bonds
 	for ci in range(p.stap_copies):
@@ -333,13 +332,6 @@ def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossove
 				atom1 = obi + ci*p.n_stap + 1
 				atom2 = backbone_neighbors[obi][1] + ci*p.n_stap + 1
 				bonds = np.append(bonds,[[type,atom1,atom2]],axis=0)
-
-	### dummy bonds
-	for bi in range(p.n_scaf):
-		type = 3
-		atom1 = bi + 1
-		atom2 = bi + p.nbead + 1
-		bonds = np.append(bonds,[[type,atom1,atom2]],axis=0)
 
 	### hybridization bonds
 	if p.forceBind or p.startBound:
@@ -360,9 +352,9 @@ def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossove
 
 	### write file
 	outGeoFile = outSimFold + "geometry.in"
-	ars.writeGeo(outGeoFile, p.dbox, r, molecules, types, bonds, nangleType=2, charges=charges)
+	ars.writeGeo(outGeoFile, p.dbox, r, molecules, types, bonds, nbondType=3, nangleType=2, charges=charges)
 
-	### return positions (without dummy atoms)
+	### return positions (without dummy atom)
 	r = r[0:p.nbead]
 	return r, nhyb, nangle
 
@@ -411,18 +403,17 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle
 	print("Writing input file...")
 
 	### computational parameters
-	verlet_skin				= 4		# nm		- width of neighbor list skin (= r12_cut - sigma)
-	neigh_every				= 10	# steps		- how often to consider updating neighbor list
-	bond_res 				= 0.1	# nm		- distance between tabular bond interpolation points
-	r12_cut_react_bond		= 4		# nm		- cutoff radius for potential hybridization bonds
-	react_every_bond		= 1E2	# steps		- how often to check for new hybridization bonds
-	react_every_angle_hyb	= 1E4	# steps		- how often to check for new hybridization angles
-	react_every_angle_dehyb	= 5E3	# steps		- how often to check for removed hybridization angles
-
-	### bond file calculations
-	r12_max = np.sqrt(3)*p.dbox
-	r12_max = r12_max - r12_max%bond_res + bond_res
-	npoint_bond = int(r12_max/bond_res+1)
+	verlet_skin				= 4		# nm			- width of neighbor list skin (= r12_cut - sigma)
+	neigh_every				= 10	# steps			- how often to consider updating neighbor list
+	bond_res 				= 0.1	# nm			- distance between tabular bond interpolation points
+	F_forceBind				= 1		# kcal/mol/nm	- force to apply for forced binding
+	r12_cut_react_bond		= 4		# nm			- cutoff radius for potential hybridization bonds
+	react_every_bond_hyb	= 1E2	# steps			- how often to check for new hybridization bonds
+	react_every_bond_dehyb	= 1E2	# steps			- how often to check for new hybridization bonds
+	react_every_angle_hyb	= 1E4	# steps			- how often to check for new hybridization angles
+	react_every_angle_dehyb	= 5E3	# steps			- how often to check for removed hybridization angles
+	comm_cutoff				= 12	# nm			- communication cutoff (relevant for parallelization)
+	U_barrier_comm			= 10	# kcal/mol		- energy barrier to exceeding communication cutoff
 
 	### count digits
 	len_nreact_bond = len(str(nreact_bond))
@@ -430,7 +421,7 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle
 	len_nreact_angle_dehyb = len(str(nreact_angle_dehyb))
 
 	### write table for hybridization bond
-	writeBondHyb(outSimFold, bond_res, r12_max, p)
+	npoint_bond = writeBondHyb(outSimFold, bond_res, F_forceBind, comm_cutoff, U_barrier_comm, p)
 
 	### open file
 	outLammpsFile = outSimFold + "lammps.in"
@@ -465,8 +456,9 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle
 		   f"pair_style      hybrid zero {p.r12_cut_WCA:0.2f} lj/cut {p.r12_cut_WCA:0.2f}\n"
 			"pair_modify     pair lj/cut shift yes\n"
 		   f"pair_coeff      * * lj/cut {p.epsilon:0.2f} {p.sigma:0.2f} {p.r12_cut_WCA:0.2f}\n"
-			"pair_coeff      * 3 zero\n"
-			"special_bonds   lj 0.0 1.0 1.0\n")
+		   f"pair_coeff      * 3 zero\n"
+			"special_bonds   lj 0.0 1.0 1.0\n"
+		   f"comm_modify     cutoff {comm_cutoff}\n")
 
 		### bonded interactions
 		f.write(
@@ -485,6 +477,8 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle
 		### group atoms
 		f.write(
 			"variable        varQ atom q\n"
+			"variable        varMolID atom mol\n"
+		   f"variable        varStrand atom \"(id <= {p.n_scaf})*1.0 + (id > {p.n_scaf})*q\"\n"
 		   f"group           real id <= {p.nbead}\n"
 			"group           mobile type 1 2\n\n")
 
@@ -531,14 +525,14 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle
 			### bond dehybridization reactions
 			if p.dehyb and not p.forceBind:
 				f.write(
-			   f"fix             bondDehyb all bond/break {int(react_every_bond)} 2 {r12_cut_react_bond:.1f}\n")
+			   f"fix             bondDehyb all bond/break {int(react_every_bond_dehyb)} 2 {r12_cut_react_bond:.1f}\n")
 
 			### bond hybridization reactions
 			f.write(
 				"fix             reactions all bond/react reset_mol_ids no")
 			for ri in range(nreact_bond):
 				f.write(
-			   f" &\n                react bondHyb{ri+1} all {int(react_every_bond)} 0.0 {r12_cut_react_bond:.1f} bondHyb{ri+1:0>{len_nreact_bond}}_mol_pre bondHyb{ri+1:0>{len_nreact_bond}}_mol_pst react/bondHyb{ri+1:0>{len_nreact_bond}}_map.txt")
+			   f" &\n                react bondHyb{ri+1} all {int(react_every_bond_hyb)} 0.0 {r12_cut_react_bond:.1f} bondHyb{ri+1:0>{len_nreact_bond}}_mol_pre bondHyb{ri+1:0>{len_nreact_bond}}_mol_pst react/bondHyb{ri+1:0>{len_nreact_bond}}_map.txt")
 			
 			### angle hybridization reactions
 			react_copies = 1
@@ -550,7 +544,7 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle
 			### angle dehybridization reactions
 			for ri in range(nreact_angle_dehyb):
 				f.write(
-			   f" &\n                react angleDehyb{ri+1:0>{len_nreact_angle_dehyb}} all {int(react_every_angle_dehyb)} {p.r12_cut_hyb:.1f} {r12_max:.1f} angleDehyb{ri+1:0>{len_nreact_angle_dehyb}}_mol angleDehyb{ri+1:0>{len_nreact_angle_dehyb}}_mol react/angleDehyb{ri+1:0>{len_nreact_angle_dehyb}}_map.txt custom_charges 4")
+			   f" &\n                react angleDehyb{ri+1:0>{len_nreact_angle_dehyb}} all {int(react_every_angle_dehyb)} {p.r12_cut_hyb:.1f} {int(np.sqrt(3)*p.dbox+1)} angleDehyb{ri+1:0>{len_nreact_angle_dehyb}}_mol angleDehyb{ri+1:0>{len_nreact_angle_dehyb}}_mol react/angleDehyb{ri+1:0>{len_nreact_angle_dehyb}}_map.txt custom_charges 4")
 			f.write("\n\n")
 
 		### binding updates
@@ -581,15 +575,15 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle
 			   f"dump            dumpD2 all local {int(p.dump_every)} dump_angles.dat index c_compD2a[1] c_compD2a[2] c_compD2b[1] c_compD2b[2] c_compD2b[3] c_compD2b[4]\n"
 				"dump_modify     dumpD2 append yes\n"
 			   f"dump            dumpD3 all custom {int(p.dump_every)} dump_charges.dat id q\n"
-				"dump_modify     dumpD3 sort id append yes\n")
+				"dump_modify     dumpD3 sort id append yes\n\n")
 
-		### 
+		### production
 		f.write(
 			"## Production\n"
 		   f"fix             tstat1 mobile langevin {p.T} {p.T} {1/p.gamma_t:0.4f} {p.rseed}\n"
 			"fix             tstat2 mobile nve\n"
 		   f"timestep        {p.dt}\n"
-		   f"dump            dump1 real custom {int(p.dump_every)} trajectory.dat id mol xs ys zs\n"
+		   f"dump            dump1 real custom {int(p.dump_every)} trajectory.dat id v_varStrand xs ys zs\n"
 			"dump_modify     dump1 sort id append yes\n"
 		   f"restart         {int(p.dump_every/2)} restart_binary1.out restart_binary2.out\n\n")
 
@@ -631,11 +625,10 @@ def writeReactBond(outSimFold, backbone_neighbors, complements, is_crossover, p)
 		### intialize
 		b = bi
 		bC = complements[b]
-		bD = b + p.nbead
 
 		### core topology
-		atoms_5to3 =  [ [0,-1,b], [1,-1,bC], [2,int(is_crossover[b]),bD] ]
-		bonds_5to3 =  [ [2,b,bD] ]
+		atoms_5to3 =  [ [0,int(is_crossover[b]),b], [1,-1,bC] ]
+		bonds_5to3 =  [ ]
 		edges_5to3 =  [ ]
 
 		### add central scaffold 5' side topology
@@ -645,13 +638,7 @@ def writeReactBond(outSimFold, backbone_neighbors, complements, is_crossover, p)
 			if b_5p == backbone_neighbors[b][0]:
 				bonds_5to3.append([0,b_5p,b])
 			else:
-				b_5p_D = b_5p + p.nbead
-				atoms_5to3.append([2,int(is_crossover[b_5p]),b_5p_D])
-				edges_5to3.append(b_5p_D)
 				bonds_5to3.append([2,b_5p,b])
-				bonds_5to3.append([2,b_5p,b_5p_D])
-				bonds_5to3.append([2,b,b_5p_D])
-				bonds_5to3.append([2,b_5p,bD])
 
 		### add central scaffold 3' side topology
 		if b_3p != -1:
@@ -660,13 +647,7 @@ def writeReactBond(outSimFold, backbone_neighbors, complements, is_crossover, p)
 			if b_3p == backbone_neighbors[b][1]:
 				bonds_5to3.append([0,b,b_3p])
 			else:
-				b_3p_D = b_3p + p.nbead
-				atoms_5to3.append([2,int(is_crossover[b_3p]),b_3p_D])
-				edges_5to3.append(b_3p_D)
 				bonds_5to3.append([2,b,b_3p])
-				bonds_5to3.append([2,b_3p,b_3p_D])
-				bonds_5to3.append([2,b,b_3p_D])
-				bonds_5to3.append([2,b_3p,bD])
 
 		### add central staple 5' end topology
 		bC_5p = backbone_neighbors[bC][0]
@@ -697,11 +678,10 @@ def writeReactBond(outSimFold, backbone_neighbors, complements, is_crossover, p)
 		### intialize
 		b = bi
 		bC = complements[b]
-		bD = b + p.nbead
 
 		### core topology
-		atoms_3to5 =  [ [0,-1,b], [1,-1,bC], [2,int(is_crossover[b]),bD] ]
-		bonds_3to5 =  [ [2,b,bD] ]
+		atoms_3to5 =  [ [0,int(is_crossover[b]),b], [1,-1,bC] ]
+		bonds_3to5 =  [ ]
 		edges_3to5 =  [ ]
 
 		### add central scaffold 3' side topology
@@ -711,13 +691,7 @@ def writeReactBond(outSimFold, backbone_neighbors, complements, is_crossover, p)
 			if b_3p == backbone_neighbors[b][1]:
 				bonds_3to5.append([0,b_3p,b])
 			else:
-				b_3p_D = b_3p + p.nbead
-				atoms_3to5.append([2,int(is_crossover[b_3p]),b_3p_D])
-				edges_3to5.append(b_3p_D)
 				bonds_3to5.append([2,b_3p,b])
-				bonds_3to5.append([2,b_3p,b_3p_D])
-				bonds_3to5.append([2,b,b_3p_D])
-				bonds_3to5.append([2,b_3p,bD])
 
 		### add central scaffold 5' side topology
 		if b_5p != -1:
@@ -726,13 +700,7 @@ def writeReactBond(outSimFold, backbone_neighbors, complements, is_crossover, p)
 			if b_5p == backbone_neighbors[b][0]:
 				bonds_3to5.append([0,b,b_5p])
 			else:
-				b_5p_D = b_5p + p.nbead
-				atoms_3to5.append([2,int(is_crossover[b_5p]),b_5p_D])
-				edges_3to5.append(b_5p_D)
 				bonds_3to5.append([2,b,b_5p])
-				bonds_3to5.append([2,b_5p,b_5p_D])
-				bonds_3to5.append([2,b,b_5p_D])
-				bonds_3to5.append([2,b_5p,bD])
 
 		### add central staple 3' end topology
 		bC_3p = backbone_neighbors[bC][1]
@@ -914,7 +882,7 @@ def writeReactBond(outSimFold, backbone_neighbors, complements, is_crossover, p)
 				f.write(f"{edges_all[ri][edgei]+1}\n")
 			
 			f.write("\nConstraints\n\n")
-			f.write("custom \"rxnsum(v_varQ,1) == rxnsum(v_varQ,2)\"\n")
+			f.write("custom \"rxnsum(v_varMolID,1) == rxnsum(v_varMolID,2)\"\n")
 
 			f.write("\nEquivalences\n\n")
 			for atomi in range(natom):
@@ -963,13 +931,10 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 		aC = complements[a]
 		bC = complements[b]
 		cC = complements[c]
-		aD = a + p.nbead
-		bD = b + p.nbead
-		cD = c + p.nbead
 
 		### core topology
-		atoms_5to3 =  [ [0,-1,a], [0,-1,b], [0,-1,c], [1,-1,cC], [1,-1,bC], [1,-1,aC], [2,int(is_crossover[a]),aD], [2,int(is_crossover[b]),bD], [2,int(is_crossover[c]),cD] ]
-		bonds_5to3 =  [ [1,a,aC], [1,b,bC], [1,c,cC], [2,a,aD], [2,b,bD], [2,c,cD] ]
+		atoms_5to3 =  [ [0,int(is_crossover[a]),a], [0,int(is_crossover[b]),b], [0,int(is_crossover[c]),c], [1,-1,cC], [1,-1,bC], [1,-1,aC] ]
+		bonds_5to3 =  [ [1,a,aC], [1,b,bC], [1,c,cC] ]
 		angles_5to3 = [ [int(is_crossover[b]),a,b,c,1] ]
 		edges_5to3 =  [ cC, aC ]
 
@@ -978,16 +943,12 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 			bonds_5to3.append([0,a,b])
 		else:
 			bonds_5to3.append([2,a,b])
-			bonds_5to3.append([2,b,aD])
-			bonds_5to3.append([2,a,bD])
 
 		### add core 3' side topology
 		if backbone_neighbors[b][1] == c:
 			bonds_5to3.append([0,b,c])
 		else:
 			bonds_5to3.append([2,b,c])
-			bonds_5to3.append([2,b,cD])
-			bonds_5to3.append([2,c,bD])
 
 		### add scaffold 5' end topology
 		a_5p = getScafNeighbors(a, backbone_neighbors, complements)[0]
@@ -999,11 +960,6 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 				bonds_5to3.append([0,a_5p,a])
 			else:
 				bonds_5to3.append([2,a_5p,a])
-				a_5p_D = a_5p + p.nbead
-				atoms_5to3.append([2,int(is_crossover[a_5p]),a_5p_D])
-				bonds_5to3.append([2,a_5p,a_5p_D])
-				bonds_5to3.append([2,a,a_5p_D])
-				bonds_5to3.append([2,a_5p,aD])
 
 		### add scaffold 3' end topology
 		c_3p = getScafNeighbors(c, backbone_neighbors, complements)[1]
@@ -1015,11 +971,6 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 				bonds_5to3.append([0,c,c_3p])
 			else:
 				bonds_5to3.append([2,c,c_3p])
-				c_3p_D = c_3p + p.nbead
-				atoms_5to3.append([2,int(is_crossover[c_3p]),c_3p_D])
-				bonds_5to3.append([2,c_3p,c_3p_D])
-				bonds_5to3.append([2,c,c_3p_D])
-				bonds_5to3.append([2,c_3p,cD])
 
 		### add central staple 5' end topology
 		bC_5p = backbone_neighbors[bC][0]
@@ -1050,13 +1001,10 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 		aC = complements[a]
 		bC = complements[b]
 		cC = complements[c]
-		aD = a + p.nbead
-		bD = b + p.nbead
-		cD = c + p.nbead
 
 		### core topology
-		atoms_3to5 =  [ [0,-1,a], [0,-1,b], [0,-1,c], [1,-1,cC], [1,-1,bC], [1,-1,aC], [2,int(is_crossover[a]),aD], [2,int(is_crossover[b]),bD], [2,int(is_crossover[c]),cD] ]
-		bonds_3to5 =  [ [1,a,aC], [1,b,bC], [1,c,cC], [2,a,aD], [2,b,bD], [2,c,cD] ]
+		atoms_3to5 =  [ [0,int(is_crossover[a]),a], [0,int(is_crossover[b]),b], [0,int(is_crossover[c]),c], [1,-1,cC], [1,-1,bC], [1,-1,aC] ]
+		bonds_3to5 =  [ [1,a,aC], [1,b,bC], [1,c,cC] ]
 		angles_3to5 = [ [int(is_crossover[b]),a,b,c,1] ]
 		edges_3to5 =  [ cC, aC ]
 
@@ -1065,16 +1013,12 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 			bonds_3to5.append([0,a,b])
 		else:
 			bonds_3to5.append([2,a,b])
-			bonds_3to5.append([2,b,aD])
-			bonds_3to5.append([2,a,bD])
 
 		### add core 5' side topology
 		if backbone_neighbors[b][0] == c:
 			bonds_3to5.append([0,b,c])
 		else:
 			bonds_3to5.append([2,b,c])
-			bonds_3to5.append([2,b,cD])
-			bonds_3to5.append([2,c,bD])
 
 		### add scaffold 3' end topology
 		a_3p = getScafNeighbors(a, backbone_neighbors, complements)[1]
@@ -1086,11 +1030,6 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 				bonds_3to5.append([0,a_3p,a])
 			else:
 				bonds_3to5.append([2,a_3p,a])
-				a_3p_D = a_3p + p.nbead
-				atoms_3to5.append([2,int(is_crossover[a_3p]),a_3p_D])
-				bonds_3to5.append([2,a_3p,a_3p_D])
-				bonds_3to5.append([2,a,a_3p_D])
-				bonds_3to5.append([2,a_3p,aD])
 
 		### add scaffold 5' end topology
 		c_5p = getScafNeighbors(c, backbone_neighbors, complements)[0]
@@ -1102,11 +1041,6 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 				bonds_3to5.append([0,c,c_5p])
 			else:
 				bonds_3to5.append([2,c,c_5p])
-				c_5p_D = c_5p + p.nbead
-				atoms_3to5.append([2,int(is_crossover[c_5p]),c_5p_D])
-				bonds_3to5.append([2,c_5p,c_5p_D])
-				bonds_3to5.append([2,c,c_5p_D])
-				bonds_3to5.append([2,c_5p,cD])
 
 		### add central staple 3' end topology
 		bC_3p = backbone_neighbors[bC][1]
@@ -1164,9 +1098,9 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 			angles_3to5_copy = copy.deepcopy(angles_3to5)
 			angles_3to5_copy[1][0] += 2
 			atoms_5to3_copy = copy.deepcopy(atoms_5to3)
-			atoms_5to3_copy[angles_5to3[1][4]+6][1] += 2
+			atoms_5to3_copy[angles_5to3[1][4]][1] += 2
 			atoms_3to5_copy = copy.deepcopy(atoms_3to5)
-			atoms_3to5_copy[angles_3to5[1][4]+6][1] += 2
+			atoms_3to5_copy[angles_3to5[1][4]][1] += 2
 			atoms_all_hyb.append(atoms_5to3_copy)
 			bonds_all_hyb.append(bonds_5to3)
 			angles_all_hyb.append(angles_5to3_copy)
@@ -1188,9 +1122,9 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 				angles_3to5_copy = copy.deepcopy(angles_3to5)
 				angles_3to5_copy[2][0] += 2
 				atoms_5to3_copy = copy.deepcopy(atoms_5to3)
-				atoms_5to3_copy[angles_5to3[2][4]+6][1] += 2
+				atoms_5to3_copy[angles_5to3[2][4]][1] += 2
 				atoms_3to5_copy = copy.deepcopy(atoms_3to5)
-				atoms_3to5_copy[angles_3to5[2][4]+6][1] += 2
+				atoms_3to5_copy[angles_3to5[2][4]][1] += 2
 				atoms_all_hyb.append(atoms_5to3_copy)
 				bonds_all_hyb.append(bonds_5to3)
 				angles_all_hyb.append(angles_5to3_copy)
@@ -1211,11 +1145,11 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 			angles_3to5_copy[1][0] += 2
 			angles_3to5_copy[2][0] += 2
 			atoms_5to3_copy = copy.deepcopy(atoms_5to3)
-			atoms_5to3_copy[angles_5to3[1][4]+6][1] += 2
-			atoms_5to3_copy[angles_5to3[2][4]+6][1] += 2
+			atoms_5to3_copy[angles_5to3[1][4]][1] += 2
+			atoms_5to3_copy[angles_5to3[2][4]][1] += 2
 			atoms_3to5_copy = copy.deepcopy(atoms_3to5)
-			atoms_3to5_copy[angles_3to5[1][4]+6][1] += 2
-			atoms_3to5_copy[angles_3to5[2][4]+6][1] += 2
+			atoms_3to5_copy[angles_3to5[1][4]][1] += 2
+			atoms_3to5_copy[angles_3to5[2][4]][1] += 2
 			atoms_all_hyb.append(atoms_5to3_copy)
 			bonds_all_hyb.append(bonds_5to3)
 			angles_all_hyb.append(angles_5to3_copy)
@@ -1312,10 +1246,10 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 				f.write(f"{atomi+1}\t{atoms[atomi][1]+1}\n")
 
 			f.write("\nFragments\n\n")
-			f.write("1\t7\n")
-			f.write("2\t8\n")
-			f.write("3\t9\n")
-			f.write("4\t7 8 9\n")
+			f.write("1\t1\n")
+			f.write("2\t2\n")
+			f.write("3\t3\n")
+			f.write("4\t1 2 3\n")
 
 		molFile = f"{outReactFold}angleHyb{ri+1:0>{len_nreact_hyb}}_mol_pst.txt"
 		with open(molFile, 'w') as f:
@@ -1325,7 +1259,7 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 			angles = copy.deepcopy(angles_all_hyb[ri])
 
 			angles[0][0] += 2
-			atoms[7][1] += 2
+			atoms[1][1] += 2
 
 			nangle_on = 0
 			for anglei in range(nangle):
@@ -1360,10 +1294,10 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 				f.write(f"{atomi+1}\t{atoms[atomi][1]+1}\n")
 
 			f.write("\nFragments\n\n")
-			f.write("1\t7\n")
-			f.write("2\t8\n")
-			f.write("3\t9\n")
-			f.write("4\t7 8 9\n")
+			f.write("1\t1\n")
+			f.write("2\t2\n")
+			f.write("3\t3\n")
+			f.write("4\t1 2 3\n")
 
 		mapFile = f"{outReactFold}angleHyb{ri+1:0>{len_nreact_hyb}}_map.txt"
 		with open(mapFile, 'w') as f:
@@ -1437,10 +1371,10 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 				f.write(f"{atomi+1}\t{atoms[atomi][1]+1}\n")
 
 			f.write("\nFragments\n\n")
-			f.write("1\t7\n")
-			f.write("2\t8\n")
-			f.write("3\t9\n")
-			f.write("4\t7 8 9\n")
+			f.write("1\t1\n")
+			f.write("2\t2\n")
+			f.write("3\t3\n")
+			f.write("4\t1 2 3\n")
 
 		mapFile = f"{outReactFold}angleDehyb{ri+1:0>{len_nreact_dehyb}}_map.txt"
 		with open(mapFile, 'w') as f:
@@ -1477,34 +1411,101 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 
 
 ### write table for hybridization bond
-def writeBondHyb(bondFold, bond_res, r12_max, p):
+def writeBondHyb(bondFold, bond_res, F_forceBind, comm_cutoff, U_barrier_comm, p):
 	bondFile = bondFold + "bond_hyb.txt"
-	npoint = int(r12_max/bond_res+1)
+	npoint = int(comm_cutoff/bond_res+1)
 
-	### forced binding force (kcal/mol/nm)
-	F_force = 1
-
+	### write file
 	with open(bondFile, 'w') as f:
 		f.write(f"hyb\n")
 		f.write(f"N {npoint}\n\n")
 		f.write("# r E(r) F(r)\n")
 		
+		### loop over points
 		for i in range(npoint):
-			r12 = i * r12_max / (npoint - 1)
+			r12 = i * bond_res
 			if r12 < p.r12_cut_hyb:
-				U = p.U_hyb*(i*bond_res/p.r12_cut_hyb-1)
+				U = p.U_hyb*(r12/p.r12_cut_hyb-1)
 				F = -p.U_hyb/p.r12_cut_hyb
 			elif p.forceBind:
-				U = 6.96*F_force*(i*bond_res-p.r12_cut_hyb)
-				F = -6.96*F_force
+				U = 6.96*F_forceBind*(r12-p.r12_cut_hyb)
+				F = -6.96*F_forceBind
+			elif r12 > comm_cutoff - 2:
+				U = 6.96*U_barrier_comm*((r12-(comm_cutoff-2))/2)**2
+				F = -6.96*U_barrier_comm*(r12-(comm_cutoff-2))
 			else:
 				U = 0
 				F = 0
+
+			### write point to file
 			f.write(f"{i + 1} {r12:.4f} {U:.4f} {F:.4f}\n")
+
+	### result
+	return npoint
 
 
 ################################################################################
 ### Calculation Managers
+
+### calculate the positions of a swirl, given set parameters
+def staticSwirl(nbead, amplitude, nperiod, radius, r12_eq, nsubstep):
+	r = np.zeros((nbead,3))
+	nsubstep = 20
+	w = 0; z = 0
+	for bi in range(nbead):
+		for i in range(nsubstep):
+			v = amplitude*nperiod/radius*np.cos(w*nperiod/radius)
+			w += r12_eq/nsubstep/np.sqrt(1+v**2)
+		r[bi,0] = radius*np.cos(w/radius)
+		r[bi,1] = radius*np.sin(w/radius)
+		r[bi,2] = amplitude*np.sin(nperiod*w/radius)
+		mismatch = np.linalg.norm(r[0]-r[bi]) - r12_eq
+		if bi > 1 and mismatch < 0:
+			if bi < nbead/nperiod:
+				print("Error: Too dense to initiate swirl.")
+				sys.exit()
+			mismatch += r12_eq*(bi-nbead+1)
+			return r, mismatch
+	return r, mismatch
+
+
+### initialize the positions of a swirl, adjusting the parameters to ensure end-to-end connectivity
+def initPositionsSwirl(nbead, dbox, r12_eq, box_frac, nsubstep, max_iteration, tolerance):
+	r = np.zeros((nbead,3))
+	l = r12_eq*nbead
+	if l/np.pi < box_frac*dbox:
+		radius = l/np.pi/2
+		for bi in range(nbead):
+			r[bi,0] = radius*np.cos(bi/nbead*2*np.pi)
+			r[bi,1] = radius*np.sin(bi/nbead*2*np.pi)
+			r[bi,2] = 0
+		print("Initialized scaffold as circle.")
+		points = np.zeros((1,nbead,3))
+		points[0] = r
+	else:
+		radius = box_frac*dbox/2
+		pf = l/(np.pi*box_frac*dbox)
+		nperiod = np.ceil((pf-0.4)/0.6)
+		amplitude = (l/np.pi-0.4*box_frac*dbox)/(0.6*2*nperiod)
+		r, mismatch = staticSwirl(nbead, amplitude, nperiod, radius, r12_eq, nsubstep)
+		points = np.zeros((max_iteration,nbead,3))
+		points[0] = r
+		iteration = 0
+		while abs(mismatch) > tolerance:
+			if iteration == max_iteration:
+				break
+			else:
+				iteration += 1
+				amplitude += -mismatch/(np.pi*0.6*2*nperiod)
+				r, mismatch = staticSwirl(nbead, amplitude, nperiod, radius, r12_eq, nsubstep)
+				points[iteration] = r
+		points = points[:iteration+1]
+		if iteration < max_iteration:
+			print(f"Swirl converged after {iteration} iteration.")
+		else:
+			print("Flag: Swirl did not converge.")
+	return r, points
+
 
 ### initialize positions, keeping strands together
 def initPositions(strands, p):
@@ -1513,13 +1514,15 @@ def initPositions(strands, p):
 	### parameters
 	max_nfail_strand = 20
 	max_nfail_bead = 20
-	dbox_scaf = p.dbox*0.8
 
 	### initializations
-	nbead_placed = 1
-	nbead_locked = 0
-	nstrand_locked = 0
+	nbead_placed = p.n_scaf
+	nbead_locked = p.n_scaf
+	nstrand_locked = 1
 	r = np.zeros((p.nbead,3))
+
+	### scaffold positions
+	r[:p.n_scaf] = initPositionsSwirl(p.n_scaf, p.dbox, p.r12_eq, 0.8, 100, 100, p.r12_eq/4)[0]
 
 	### loop over beads
 	nfail_strand = 0
@@ -1691,7 +1694,7 @@ def rbi2obi(rbi, p):
 	elif rbi < p.nbead:
 		return (rbi-p.n_scaf)%p.n_stap + p.n_scaf
 	else:
-		print("Error: origami bead index not defined for dummy atoms.")
+		print("Error: origami bead index not defined for the dummy atom.")
 
 
 ################################################################################
