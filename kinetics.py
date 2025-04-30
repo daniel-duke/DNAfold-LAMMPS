@@ -24,6 +24,7 @@ def main():
 	parser.add_argument('--nstep_skip',		type=float,	default=0,		help='number of recorded initial steps to skip')
 	parser.add_argument('--nstep_max',		type=float,	default=0,		help='max number of recorded steps to use (0 for all)')
 	parser.add_argument('--coarse_time',	type=int,	default=1,		help='coarse factor for time steps')
+	parser.add_argument('--saveFig',		type=int,	default=False,	help='whether to save png of figures')
 
 	### set arguments
 	args = parser.parse_args()
@@ -31,6 +32,7 @@ def main():
 	nstep_skip = int(args.nstep_skip)
 	nstep_max = int(args.nstep_max)
 	coarse_time = args.coarse_time
+	saveFig = args.saveFig
 
 	### get simulation folders
 	simFolds, nsim = utils.getSimFolds(copiesFile)
@@ -67,8 +69,10 @@ def main():
 
 	### analyze kinetics
 	plotKinetics(hyb_status_allSim, strands, n_scaf, dump_every)
+	if saveFig: plt.savefig("analysis/kinetics.pdf")
 	plotNhyb(hyb_status_allSim, n_scaf, dump_every)
-	plt.show()
+	if saveFig: plt.savefig("analysis/n_hyb.pdf")
+	if not saveFig: plt.show()
 
 
 ################################################################################
@@ -82,6 +86,7 @@ def plotKinetics(hyb_status_allSim, strands, n_scaf, dump_every):
 	nstep = hyb_status_allSim.shape[1]
 	nbead = hyb_status_allSim.shape[2]
 	nstap = max(strands)-1
+	conc_min = 1/nstap/nsim
 	conc_avg = np.zeros(nstep)
 	conc_sem = np.zeros(nstep)
 	for i in range(nstep):
@@ -91,7 +96,7 @@ def plotKinetics(hyb_status_allSim, strands, n_scaf, dump_every):
 				if hyb_status_allSim[k,i,j] == 1:
 					stap_freedom[strands[j]-2,k] = 0
 		conc_indiv = np.mean(stap_freedom,axis=1)
-		conc_avg[i] = max(np.mean(conc_indiv), 1/nstap/nsim)
+		conc_avg[i] = max(np.mean(conc_indiv), conc_min)
 		conc_sem[i] = ars.calcSEM(conc_indiv)
 
 	### calculate time
@@ -99,13 +104,19 @@ def plotKinetics(hyb_status_allSim, strands, n_scaf, dump_every):
 	scale = 5200
 	time = np.arange(nstep)*dump_every*dt*scale*1E-9
 
+	### calculate uncertainty
+	conc_min_arr = conc_min*np.ones(nstep)
+	error_min = np.maximum(np.log(conc_avg-conc_sem),np.log(conc_min_arr))
+	error_max = np.log(conc_avg+conc_sem)
+
 	### plot
 	ars.magicPlot()
 	plt.figure("Kinetics",figsize=(8,6))
 	plt.plot(time,np.log(conc_avg))
-	plt.fill_between(time,np.log(conc_avg-conc_sem),np.log(conc_avg+conc_sem),alpha=0.3)
+	plt.fill_between(time,error_min,error_max,alpha=0.3)
 	plt.xlabel("Time [s]")
 	plt.ylabel("$\\ln(C/C_0)$")
+	plt.ylim(np.log(conc_min)*1.05,-np.log(conc_min)*0.05)
 	plt.title("Free Staple Kinetics")
 	plt.legend(['Mean','SEM'])
 
@@ -136,6 +147,7 @@ def plotNhyb(hyb_status_allSim, n_scaf, dump_every):
 	plt.axhline(y=n_scaf,color='k',linestyle='--')
 	plt.xlabel("Time [s]")
 	plt.ylabel("N\\textsubscript{hyb}")
+	plt.ylim(-n_scaf*0.05,n_scaf*1.05)
 	plt.title("Number of Scaffold Hybridizations")
 	plt.legend(['Mean','SEM','N\\textsubscript{scaffold}'])
 

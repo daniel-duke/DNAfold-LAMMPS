@@ -1,4 +1,5 @@
 import armament as ars
+import utils
 import utilsLocal
 import argparse
 import parameters
@@ -21,8 +22,8 @@ import os
 
 # To Do
 # add blocking cases for angle template that arise from using multiple staple
-  # copies, input file, parameterize 90 degree angular potential, reactions that
-  # shorten crossover bond length
+  # copies, parameterize 90 degree angular potential, reactions that shorten
+  # crossover bond length
 
 
 ################################################################################
@@ -31,35 +32,34 @@ import os
 def main():
 
 	### where to get files
-	useMyFiles = False
+	useMyFiles = True
 
 	### extract files from my mac
 	if useMyFiles:
 
 		### chose design
-		desID = "16HB2x2x2"
+		desID = "2HBx4"
 		simTag = ""
 		simType = "experiment"
-		rstapTag = None
-		rseed = 1
+		rstapTag = ""
+		rseed = 3
 
-		### computational parameters
-		nstep			= 1E7		# steps			- number of simulation steps
-		nstep_relax		= 1E5		# steps			- number of steps for relaxation
-		dump_every		= 1E4		# steps			- number of steps between positions dumps
-		dbox			= 100		# nm			- periodic boundary diameter
-		forceBind		= False		# bool			- whether to force hybridization
-
-		### design parameters
-		circularScaf	= True		# bool			- whether the scaffold is circular
-		stap_copies		= 1 		# int			- number of copies for each staples
+		### choose parameters
+		nstep			= 5E6		# steps		- number of simulation steps
+		nstep_relax		= 1E5		# steps		- number of steps for relaxation
+		dump_every		= 1E4		# steps		- number of steps between positions dumps
+		dbox			= 40		# nm		- periodic boundary diameter
+		forceBind		= False		# bool		- whether to force hybridization
+		startBound		= False		# bool		- whether to start at caDNAno positions
+		circularScaf	= True		# bool		- whether the scaffold is circular
+		stap_copies		= 1 		# int		- number of copies for each staples
 
 		### get input files
 		cadFile = utilsLocal.getCadFile(desID)
 		rstapFile = utilsLocal.getRstapFile(desID, rstapTag) if rstapTag is not None else None
 
 		### set parameters
-		cadFile, rstapFile, p = readInput(None, rseed, cadFile, rstapFile, nstep, nstep_relax, dump_every, dbox, circularScaf, stap_copies)
+		cadFile, rstapFile, p = readInput(None, rseed, cadFile, rstapFile, nstep, nstep_relax, dump_every, dbox, forceBind, startBound, circularScaf, stap_copies)
 		
 		### set output folder
 		outFold = utilsLocal.getSimHomeFold(desID, simTag, simType)
@@ -113,7 +113,7 @@ def main():
 	ars.createSafeFold(outSimFold)
 
 	### write geometry files
-	r, nhyb, nangle = composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossover, is_reserved_strand, p)
+	r, nhyb, nangle = composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossover, is_reserved_strand, cadFile, p)
 	composeGeoVis(outSimFold, strands, backbone_neighbors, r, p)
 
 	### write bond react files
@@ -130,74 +130,56 @@ def main():
 ### File Handlers
 
 ### read input file
-def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, nstep=None, nstep_relax=1E5, dump_every=1E4, dbox=100, forceBind=False, circularScaf=True, stap_copies=1):
+def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, nstep=None, nstep_relax=1E5, dump_every=1E4, dbox=100, forceBind=False, startBound=False, circularScaf=True, stap_copies=1):
 
 	### list keys that can have 'None' as their final value
 	allow_none_default = {'rstapFile'}
 
 	### define parameters with their default values
 	param_defaults = {
-		# Files
 		'cadFile':		cadFile,		# str			- name of caDNAno file (required)
 		'rstapFile':	rstapFile,		# str			- name of reserved staples file
-
-		# Computational parameters
 		'nstep': 		nstep,			# steps			- number of simulation steps (required)
 		'nstep_relax': 	nstep_relax,	# steps			- number of steps for relaxation
 		'dump_every': 	dump_every,		# steps			- number of steps between positions dumps
 		'dt': 			0.01,			# ns			- integration time step
 		'dbox': 		dbox,			# nm			- periodic boundary diameter
-		'forceBind': 	forceBind,		# bool			- whether to force hybridization (not applied if >1 staple copies)
-		'dehyb': 		True,			# bool			- whether to include dehybridization reactions (unnecessary for 1 staple copy)
 		'debug': 		False,			# bool			- whether to include debugging output
-
-		# Design parameters
-		'nnt_per_bead':	8,				# nt			- nucleotides per bead (only 8)
+		'dehyb': 		True,			# bool			- whether to include dehybridization reactions (unnecessary for 1 staple copy)
+		'forceBind': 	forceBind,		# bool			- whether to force hybridization (not applied if >1 staple copies)
+		'startBound': 	startBound,		# bool			- whether to start at caDNAno positions
 		'circularScaf':	circularScaf,	# bool			- whether the scaffold is circular
 		'stap_copies': 	stap_copies,	# int			- number of copies for each staples
-
-		# Physical parameters
 		'T':			300,			# K				- temperature
 		'r_h_bead':		1.28,			# nm			- hydrodynamic radius of single bead
 		'visc':			0.8472,			# mPa/s			- viscosity (units equivalent to pN*ns/mn^2)
-
-		# Interaction parameters
 		'sigma':		2.14,			# nm			- bead Van der Waals radius
 		'epsilon':		4.0,			# kcal/mol		- WCA energy parameter
 		'r12_eq':		2.72,			# nm			- equilibrium bead separation
 		'k_x': 			120.0,			# kcal/mol/nm2	- backbone spring constant (standard definition)
 		'r12_cut_hyb':	2.0,			# nm			- hybridization potential cutoff radius
-		'U_hyb':		10.0,			# kcal/mol		- depth of hybridization potential
+		'U_hyb':		8.0,			# kcal/mol		- depth of hybridization potential
 		'dsLp': 		50.0			# nm			- persistence length of dsDNA
 	}
 
 	### define types for each parameter
 	param_types = {
-		# Files
 		'cadFile':		str,
 		'rstapFile':	str,
-
-		# Computational parameters
 		'nstep':		lambda x: int(float(x)),
 		'nstep_relax':	lambda x: int(float(x)),
 		'dump_every':	lambda x: int(float(x)),
 		'dt':			float,
 		'dbox':			float,
-		'forceBind':	lambda x: x.lower() == 'true',
-		'dehyb':		lambda x: x.lower() == 'true',
 		'debug':		lambda x: x.lower() == 'true',
-
-		# Design parameters
-		'nnt_per_bead':	int,
+		'dehyb':		lambda x: x.lower() == 'true',
+		'forceBind':	lambda x: x.lower() == 'true',
+		'startBound':	lambda x: x.lower() == 'true',
 		'circularScaf':	lambda x: x.lower() == 'true',
 		'stap_copies':	int,
-
-		# Physical parameters
 		'T':			float,
 		'r_h_bead':		float,
 		'visc':			float,
-
-		# Interaction parameters
 		'sigma':		float,
 		'epsilon':		float,
 		'r12_eq':		float,
@@ -247,12 +229,11 @@ def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, nstep=None, ns
 	### get reserved staples file
 	rstapFile = params['rstapFile']
 	del params['rstapFile']
-	params['reserveStap'] = True
-	if rstapFile is None:
-		params['reserveStap'] = False
+	params['reserveStap'] = False if rstapFile is None else True
 
-	### add random seed to parameters
+	### add parameters not set though input file
 	params['rseed'] = rseed
+	params['nnt_per_bead'] = 8
 
 	### convert into parameters class and return
 	p = parameters.parameters(params)
@@ -279,11 +260,16 @@ def readRstap(rstapFile, p):
 
 
 ### write lammps geometry file, for simulation
-def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossover, is_reserved_strand, p):
+def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossover, is_reserved_strand, cadFile, p):
 	print("Writing simulation geometry file...")
 
 	### initailize positions
-	r = initPositions(strands, p)
+	if p.startBound:
+		stap_offset = 0.01
+		r = utils.initPositionsCaDNAno(cadFile)[0]
+		r[p.n_scaf:] += stap_offset
+	else:
+		r = initPositions(strands, p)
 	r = np.append(r,np.zeros((p.n_scaf,3)),axis=0)
 
 	### initialize
@@ -303,8 +289,8 @@ def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossove
 	for ci in range(p.stap_copies):
 		for obi in range(p.n_scaf,p.n_ori):
 			rbi = obi + ci*p.n_stap
-			types[rbi] = 2
 			molecules[rbi] = strands[obi] + ci*(p.nstrand-1) + 1
+			types[rbi] = 2
 			if complements[obi] != -1:
 				if ci == 0:
 					nhyb += 1
@@ -331,7 +317,7 @@ def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossove
 	if p.circularScaf:
 		bonds = np.append(bonds,[[1,p.n_scaf,1]],axis=0)
 	else:
-		if getScafNeighbors(0,backbone_neighbors,complements)[0] == 0:
+		if getScafNeighbors(0,backbone_neighbors,complements)[0] == p.n_scaf-1:
 			bonds = np.append(bonds,[[3,1,p.n_scaf]],axis=0)
 			bonds = np.append(bonds,[[3,1,p.n_scaf+p.nbead]],axis=0)
 			bonds = np.append(bonds,[[3,p.n_scaf,1+p.nbead]],axis=0)
@@ -356,7 +342,7 @@ def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossove
 		bonds = np.append(bonds,[[type,atom1,atom2]],axis=0)
 
 	### hybridization bonds
-	if p.forceBind:
+	if p.forceBind or p.startBound:
 		for bi in range(p.n_scaf):
 			if complements[bi] != -1:
 				type = 2
@@ -431,7 +417,7 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle
 	r12_cut_react_bond		= 4		# nm		- cutoff radius for potential hybridization bonds
 	react_every_bond		= 1E2	# steps		- how often to check for new hybridization bonds
 	react_every_angle_hyb	= 1E4	# steps		- how often to check for new hybridization angles
-	react_every_angle_dehyb	= 1E2	# steps		- how often to check for removed hybridization angles
+	react_every_angle_dehyb	= 5E3	# steps		- how often to check for removed hybridization angles
 
 	### bond file calculations
 	r12_max = np.sqrt(3)*p.dbox
@@ -498,7 +484,7 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_bond, nreact_angle
 
 		### group atoms
 		f.write(
-			"variable        var1 atom q\n"
+			"variable        varQ atom q\n"
 		   f"group           real id <= {p.nbead}\n"
 			"group           mobile type 1 2\n\n")
 
@@ -928,7 +914,7 @@ def writeReactBond(outSimFold, backbone_neighbors, complements, is_crossover, p)
 				f.write(f"{edges_all[ri][edgei]+1}\n")
 			
 			f.write("\nConstraints\n\n")
-			f.write("custom \"rxnsum(v_var1,1) == rxnsum(v_var1,2)\"\n")
+			f.write("custom \"rxnsum(v_varQ,1) == rxnsum(v_varQ,2)\"\n")
 
 			f.write("\nEquivalences\n\n")
 			for atomi in range(natom):
@@ -1396,12 +1382,12 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 				f.write(f"{edges_all_hyb[ri][edgei]+1}\n")
 			
 			f.write("\nConstraints\n\n")
-			f.write(f"custom \"round(rxnsum(v_var1,{angles_all_hyb[ri][0][4]+1})) == {angles_all_hyb[ri][0][0]+1} || "
-							 f"round(rxnsum(v_var1,{angles_all_hyb[ri][0][4]+1})) == {angles_all_hyb[ri][0][0]+3}\"\n")
+			f.write(f"custom \"round(rxnsum(v_varQ,{angles_all_hyb[ri][0][4]+1})) == {angles_all_hyb[ri][0][0]+1} || "
+							 f"round(rxnsum(v_varQ,{angles_all_hyb[ri][0][4]+1})) == {angles_all_hyb[ri][0][0]+3}\"\n")
 			if nangle >= 2:
-				f.write(f"custom \"round(rxnsum(v_var1,{angles_all_hyb[ri][1][4]+1})) == {angles_all_hyb[ri][1][0]+1}\"\n")
+				f.write(f"custom \"round(rxnsum(v_varQ,{angles_all_hyb[ri][1][4]+1})) == {angles_all_hyb[ri][1][0]+1}\"\n")
 			if nangle >= 3:
-				f.write(f"custom \"round(rxnsum(v_var1,{angles_all_hyb[ri][2][4]+1})) == {angles_all_hyb[ri][2][0]+1}\"\n")
+				f.write(f"custom \"round(rxnsum(v_varQ,{angles_all_hyb[ri][2][4]+1})) == {angles_all_hyb[ri][2][0]+1}\"\n")
 			f.write("distance 1 6 0.0 2.0\n")
 			f.write("distance 3 4 0.0 2.0\n")
 
@@ -1473,14 +1459,14 @@ def writeReactAngle(outSimFold, strands, backbone_neighbors, complements, is_cro
 				f.write(f"{edges_all_dehyb[ri][edgei]+1}\n")
 
 			f.write("\nConstraints\n\n")
-			f.write(f"custom \"round(rxnsum(v_var1,{angles_all_hyb[ri][0][4]+1})) == {angles_all_dehyb[ri][0][0]+1} || "
-							 f"round(rxnsum(v_var1,{angles_all_hyb[ri][0][4]+1})) == {angles_all_dehyb[ri][0][0]+3}\"\n")
+			f.write(f"custom \"round(rxnsum(v_varQ,{angles_all_hyb[ri][0][4]+1})) == {angles_all_dehyb[ri][0][0]+1} || "
+							 f"round(rxnsum(v_varQ,{angles_all_hyb[ri][0][4]+1})) == {angles_all_dehyb[ri][0][0]+3}\"\n")
 			if nangle >= 2:
-				f.write(f"custom \"round(rxnsum(v_var1,{angles_all_dehyb[ri][1][4]+1})) == {angles_all_dehyb[ri][1][0]+1} || "
-								 f"round(rxnsum(v_var1,{angles_all_dehyb[ri][1][4]+1})) == {angles_all_dehyb[ri][1][0]+3}\"\n")
+				f.write(f"custom \"round(rxnsum(v_varQ,{angles_all_dehyb[ri][1][4]+1})) == {angles_all_dehyb[ri][1][0]+1} || "
+								 f"round(rxnsum(v_varQ,{angles_all_dehyb[ri][1][4]+1})) == {angles_all_dehyb[ri][1][0]+3}\"\n")
 			if nangle >= 3:
-				f.write(f"custom \"round(rxnsum(v_var1,{angles_all_dehyb[ri][2][4]+1})) == {angles_all_dehyb[ri][2][0]+1} || "
-								 f"round(rxnsum(v_var1,{angles_all_dehyb[ri][2][4]+1})) == {angles_all_dehyb[ri][2][0]+3}\"\n")
+				f.write(f"custom \"round(rxnsum(v_varQ,{angles_all_dehyb[ri][2][4]+1})) == {angles_all_dehyb[ri][2][0]+1} || "
+								 f"round(rxnsum(v_varQ,{angles_all_dehyb[ri][2][4]+1})) == {angles_all_dehyb[ri][2][0]+3}\"\n")
 
 			f.write("\nEquivalences\n\n")
 			for atomi in range(natom):

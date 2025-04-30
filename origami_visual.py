@@ -24,18 +24,19 @@ import sys
 def main():
 
 	### where to get files
-	useMyFiles = False
+	useMyFiles = True
 
 	### extract files from local system
 	if useMyFiles:
 
 		### chose design
-		desID = "16HB2x2x2"
+		desID = "2HBx4"
 
 		### analysis options
-		confTag = "_ideal"			# if using oxdna position, tag for configuration file
-		rstapTag = "_des16"			# if reserving staples, tag for reserved staples file
-		circularScaf = True			# whether to add bond between scaffold ends
+		confTag = None			# if using oxdna position, tag for configuration file
+		rstapTag = None			# if reserving staples, tag for reserved staples file
+		circularScaf = False	# whether to add bond between scaffold ends
+		cornerView = False		# whether to view the origami at an angle
 
 		### get input files
 		cadFile = utilsLocal.getCadFile(desID)
@@ -60,7 +61,8 @@ def main():
 		parser.add_argument('--topFile',		type=str, 	default=None,	help='if using oxdna positions, name of topology file')
 		parser.add_argument('--confFile',		type=str, 	default=None,	help='if using oxdna positions, name of conformation file')
 		parser.add_argument('--rstapFile',		type=str, 	default=None,	help='if reserving staples, name of reserved staples file')
-		parser.add_argument('--circularScaf',	type=bool,	default=True,	help='whether to add bond between scaffold ends (boolean)')
+		parser.add_argument('--circularScaf',	type=int,	default=True,	help='whether to add bond between scaffold ends')
+		parser.add_argument('--cornerView',		type=int,	default=False,	help='whether to view the origami at an angle')
 
 		### set arguments
 		args = parser.parse_args()
@@ -69,6 +71,7 @@ def main():
 		confFile = args.confFile
 		rstapFile = args.rstapFile
 		circularScaf = args.circularScaf
+		cornerView = args.cornerView
 
 		### determine position source
 		if topFile is not None and confFile is not None:
@@ -96,6 +99,7 @@ def main():
 	if position_src == "cadnano":
 		r, strands = utils.initPositionsCaDNAno(cadFile)
 	if position_src == "oxdna":
+		print(cadFile)
 		r, strands = utils.initPositionsOxDNA(cadFile, topFile, confFile)
 
 	### prepare the data for nice redering
@@ -108,14 +112,14 @@ def main():
 
 	### write ovito file
 	ovitoFile = outFold + "analysis/vis_ideal.ovito"
-	writeOvito(ovitoFile, outGeoFile)
+	writeOvito(ovitoFile, outGeoFile, cornerView)
 
 
 ################################################################################
 ### File Handlers
 
 ### write session state vito file that visualizes the geometry
-def writeOvito(ovitoFile, outGeoFile):
+def writeOvito(ovitoFile, outGeoFile, cornerView):
 
 	### set colors
 	scaf_color = ars.getColor("orchid")
@@ -127,6 +131,13 @@ def writeOvito(ovitoFile, outGeoFile):
 
 	### prepare basic DNAfold scene
 	pipeline = utils.setOvitoBasics(pipeline)
+
+	### set active viewport to corner view
+	if cornerView:
+		viewport = scene.viewports.active_vp
+		viewport.camera_dir = (1,-1,-1)
+		viewport.camera_up = (0,0,1)
+		viewport.zoom_all()
 
 	### set scaffold and staple particle radii and bond widths
 	pipeline.modifiers.append(ComputePropertyModifier(output_property='Radius',expressions=['(ParticleType==1)?0.6:1']))

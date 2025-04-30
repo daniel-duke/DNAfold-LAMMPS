@@ -47,7 +47,7 @@ def main():
 	parser.add_argument('--corr_var',		type=str,	default="final_S",	help='hat to correlate with the strands (values: final_S, final_n_hyb)')
 	parser.add_argument('--corr_type',		type=str,	default="hyb_last",	help='how to average correlation across strand (values: hyb_avg, hyb_first, hyb_last, corr_avg, corr_max')
 	parser.add_argument('--values_report',	type=str,	default="none",		help='what staple results to report (values: none, staple, corr, all')
-	parser.add_argument('--loadResults',	type=bool,	default=False,		help='whether to load the results from a pickle file')
+	parser.add_argument('--loadResults',	type=int,	default=False,		help='whether to load the results from a pickle file')
 	parser.add_argument('--nstep_skip',		type=float,	default=0,			help='if not loading results, number of recorded initial steps to skip')
 	parser.add_argument('--nstep_max',		type=float,	default=0,			help='max number of recorded steps to use (0 for all)')
 	parser.add_argument('--coarse_time',	type=int,	default=1,			help='if not loading results, coarse factor for time steps')

@@ -192,6 +192,57 @@ def calcCrystallinity(points, dbox):
 	return S
 
 
+### aligning structures for RMSD
+def kabsch_algorithm(r_real, r_ideal):
+
+	# Center both point sets at the origin
+	r_ideal_centered = r_ideal - r_ideal.mean(axis=0)
+	r_real_centered = r_real - r_real.mean(axis=0)
+
+	# Compute covariance matrix
+	H = r_real_centered.T @ r_ideal_centered
+
+	# Singular Value Decomposition
+	U, S, Vt = np.linalg.svd(H)
+
+	# Compute rotation matrix
+	R = Vt.T @ U.T
+
+	# Ensure right-handed coordinate system (det(R)=1)
+	if np.linalg.det(R) < 0:
+		Vt[-1, :] *= -1
+		R = Vt.T @ U.T
+
+	# Rotate real points
+	r_real_rotated = r_real_centered @ R
+
+	# Translate real rotated point to the same mean as ideal points
+	r_real_aligned = r_real_rotated + r_ideal.mean(axis=0)
+	return r_real_aligned
+
+
+### calculate mean structure of trajectory
+def calcMeanStructure(points):
+    nstep = points.shape[0]
+    nbead = points.shape[1]
+    reference = points[0]
+    points_aligned = np.zeros_like(points)
+    for i in range(nstep):
+        points_aligned[i] = kabsch_algorithm(points[i], reference)
+    mean_structure = np.mean(points_aligned, axis=0)
+    return mean_structure
+
+
+### calculate RMSD between a trajectory of points and an ideal configuration
+def calcRMSD(points, r_ideal):
+	nstep = points.shape[0]
+	RMSD = np.zeros(nstep)
+	for i in range(nstep):
+		points_aligned = kabsch_algorithm(points[i], r_ideal)
+		RMSD[i] = np.sqrt(np.mean(np.sum((points_aligned - r_ideal) ** 2, axis=1)))
+	return RMSD
+
+
 ### initialize positions according to caDNAno positions
 def initPositionsCaDNAno(cadFile):
 	print("Initializing positions from caDNAno...")

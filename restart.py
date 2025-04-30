@@ -28,6 +28,7 @@ def main():
 	parser.add_argument('--simFold',	type=str,	default=None,	help='name of simulation folder, should exist within current directory')
 	parser.add_argument('--rseed',		type=int,	default=1,		help='random seed, used to find simFold if necessary')
 	parser.add_argument('--astapFile',	type=str,	default=None,	help='if adding staples, path to add staple file')
+	parser.add_argument('--parSim',		type=int,	default=False,	help='whether the simulation is parallel (affects geometry interpretation)')
 
 	### parameters
 	r12_eq = 2.72				# if adding staples, equilibrium bead separation
@@ -39,6 +40,7 @@ def main():
 	simFold = args.simFold
 	rseed = args.rseed
 	astapFile = args.astapFile
+	parSim = args.parSim
 
 	### get simulation folders
 	simFolds, nsim = utils.getSimFolds(None, simFold, rseed)
@@ -62,18 +64,27 @@ def main():
 
 			### read geometry file
 			geoFile = simFolds[i] + "restart_geometry.out"
-			points, strands, types, charges, bonds, angles = ars.readGeo(geoFile)
+			r, molecules, types, charges, bonds, angles = ars.readGeo(geoFile)
 			dbox3 = ars.getDbox3(geoFile)
-			nstrand = max(strands)
+
+			### figure out strands
+			if not parSim:
+				strands = molecules
+			else:
+				n_scaf = len(types[types==1])
+				nbead = len(types)-1
+				strands = np.ones(nbead,dtype=int)
+				strands[n_scaf:] = charges[n_scaf:nbead].astype(int)
 
 			### add staples
+			nstrand = max(strands)
 			is_add_strand = readAstap(astapFile, nstrand)
-			points, types = addStap(points, strands, types, is_add_strand, r12_eq, sigma, dbox3[0])
+			r, types = addStap(r, strands, types, is_add_strand, r12_eq, sigma, dbox3[0])
 			bonds = updateBondTypes(bonds, types)
 
 			### write geometry file
 			outGeoFile = simFolds[i] + "restart_geometry.in"
-			ars.writeGeo(outGeoFile, dbox3, points, strands, types, bonds, angles, nangleType=2, charges=charges, precision=16)
+			ars.writeGeo(outGeoFile, dbox3, r, molecules, types, bonds, angles, nbondType=3, nangleType=2, charges=charges, precision=16)
 
 
 ################################################################################

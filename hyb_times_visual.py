@@ -39,7 +39,7 @@ def main():
 	parser.add_argument('--rseed',		type=int,	default=1,		help='random seed, used to find simFold if necessary')
 	parser.add_argument('--topFile',	type=str, 	default=None,	help='if using oxdna positions, name of topology file')
 	parser.add_argument('--confFile',	type=str, 	default=None,	help='if using oxdna positions, name of conformation file')
-	parser.add_argument('--writeIndiv',	type=bool,	default=True,	help='whether to write individual hybridization trajectories')
+	parser.add_argument('--writeIndiv',	type=int,	default=True,	help='whether to write individual hybridization trajectories')
 	parser.add_argument('--avg_type',	type=str,	default="last", help='how to get hyb times for each staple (values: direct, avg, first, last)')
 
 	### set arguments

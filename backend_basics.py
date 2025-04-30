@@ -42,6 +42,7 @@ def main():
 	parser.add_argument('--nstep_skip',		type=float,	default=0,		help='number of recorded initial steps to skip')
 	parser.add_argument('--nstep_max',		type=float,	default=0,		help='max number of recorded steps to use (0 for all)')
 	parser.add_argument('--coarse_time',	type=int,	default=1,		help='coarse factor for time steps')
+	parser.add_argument('--parSim',			type=int,	default=False,	help='whether the simulation is parallel (affects geometry interpretation)')
 
 	### analysis options
 	center = 1						# what to place at center
@@ -58,6 +59,7 @@ def main():
 	nstep_skip = int(args.nstep_skip)
 	nstep_max = int(args.nstep_max)
 	coarse_time = args.coarse_time
+	parSim = args.parSim
 
 	### interpret input
 	if nstep_max == 0:
@@ -72,7 +74,7 @@ def main():
 
 	### get connectivity vars
 	geoFile = simFolds[0] + "geometry.in"
-	strands, bonds_backbone, complements, n_scaf, nbead, circularScaf = processGeo(geoFile)
+	strands, bonds_backbone, complements, n_scaf, nbead, circularScaf = processGeo(geoFile, parSim)
 
 	### write conectivity vars
 	ars.createSafeFold("analysis")
@@ -117,7 +119,7 @@ def submain(simFold, strands, bonds_backbone, complements, nstep_skip, nstep_max
 
 	### write complete trajectories
 	writeAtomDump(outDatFile, dbox, points_centered, colors, set_color, dump_every)
-	ars.writeGeo(outGeoVisFile, dbox, points[0], types=colors, bonds=bonds_backbone)
+	ars.writeGeo(outGeoVisFile, dbox, points[0], strands, colors, bonds_backbone)
 
 	### hybridization analysis
 	hyb_status = calcHybStatus(points, complements, dbox, r12_cut_hyb)
@@ -128,16 +130,32 @@ def submain(simFold, strands, bonds_backbone, complements, nstep_skip, nstep_max
 ### File Managers
 
 ### extract information from geometry file
-def processGeo(geoFile):
-	strands, types, charges, bonds = ars.readGeo(geoFile)[1:5]
+def processGeo(geoFile, parSim):
 
-	### bead numbers and trimming
+	### read file
+	molecules, types, charges, bonds = ars.readGeo(geoFile)[1:5]
 	n_scaf = len(types[types==1])
-	nbead = len(types)-n_scaf
-	strands = strands[:nbead]
 
-	### calculate complements
-	complements = getComplements(charges, n_scaf, nbead)
+	### regular simulation
+	if not parSim:
+
+		### bead numbers and trimming
+		nbead = len(types)-n_scaf
+		strands = molecules[:nbead]
+
+		### calculate complements
+		complements = getComplements(charges, n_scaf, nbead)
+
+	### parallel simulation
+	else:
+
+		### bead numbers and trimming
+		nbead = len(types)-1
+		strands = np.ones(nbead,dtype=int)
+		strands[n_scaf:] = charges[n_scaf:nbead].astype(int)
+
+		### calculate complements
+		complements = getComplements(molecules, n_scaf, nbead)
 
 	### analyze bonds
 	bonds_backbone = bonds[ (bonds[:,0]!=2) & (bonds[:,1]<=nbead) & (bonds[:,2]<=nbead) ]
@@ -189,15 +207,15 @@ def writeHybStatus(outHybFile, hyb_status, dump_every):
 ### Calculation Managers
 
 ### use charges to get complimentary beads (for all beads)
-def getComplements(charges, n_scaf, nbead):
+def getComplements(comp_tags, n_scaf, nbead):
 	complements = [[] for i in range(nbead)]
 	for i in range(n_scaf):
 		for j in range(n_scaf,nbead):
-			if charges[i] == charges[j]:
+			if comp_tags[i] == comp_tags[j]:
 				complements[i].append(j+1)
 	for i in range(n_scaf,nbead):
 		for j in range(n_scaf):
-			if charges[i] == charges[j]:
+			if comp_tags[i] == comp_tags[j]:
 				complements[i].append(j+1)
 	return complements
 
