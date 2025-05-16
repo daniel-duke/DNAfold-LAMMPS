@@ -34,8 +34,8 @@ def main():
 
 		### analysis options
 		confTag = None			# if using oxdna position, tag for configuration file
-		rstapTag = None			# if reserving staples, tag for reserved staples file
-		circularScaf = False	# whether to add bond between scaffold ends
+		rstapTag = ""			# if reserving staples, tag for reserved staples file
+		circularScaf = True		# whether to add bond between scaffold ends
 		cornerView = False		# whether to view the origami at an angle
 
 		### get input files
