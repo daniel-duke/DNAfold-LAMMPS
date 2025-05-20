@@ -42,10 +42,10 @@ def main():
 		simTag = ""
 		simType = "experiment"
 		rstapTag = ""
-		rseed = 3
+		rseed = 1
 
 		### choose parameters
-		nstep			= 5E6		# steps		- number of simulation steps
+		nstep			= 1E7		# steps		- number of simulation steps
 		nstep_relax		= 1E5		# steps		- number of steps for relaxation
 		dump_every		= 1E4		# steps		- number of steps between positions dumps
 		dbox			= 40		# nm		- periodic boundary diameter
@@ -158,7 +158,7 @@ def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, nstep=None, ns
 		'r12_eq':		2.72,			# nm			- equilibrium bead separation
 		'k_x': 			120.0,			# kcal/mol/nm2	- backbone spring constant (standard definition)
 		'r12_cut_hyb':	2.0,			# nm			- hybridization potential cutoff radius
-		'U_hyb':		8.0,			# kcal/mol		- depth of hybridization potential
+		'U_hyb':		10.0,			# kcal/mol		- depth of hybridization potential
 		'dsLp': 		50.0			# nm			- persistence length of dsDNA
 	}
 
