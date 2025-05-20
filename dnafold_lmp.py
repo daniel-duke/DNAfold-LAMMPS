@@ -470,9 +470,9 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, ntemplate_hybBond, nreact
 		### angled interactions
 		if nangle:
 			f.write(
-			   f"angle_style     harmonic\n"
-			   f"angle_coeff     1 {p.k_theta/2:0.2f} 180\n"
-			   f"angle_coeff     2 {p.k_theta/2:0.2f} 90\n")
+		   f"angle_style     harmonic\n"
+		   f"angle_coeff     1 {p.k_theta/2:0.2f} 180\n"
+		   f"angle_coeff     2 {p.k_theta/2:0.2f} 90\n")
 
 		### group atoms
 		f.write(
@@ -485,36 +485,39 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, ntemplate_hybBond, nreact
 		### relax everything
 		if p.nstep_relax > 0:
 			f.write(
-				"## Relaxation\n"
-			   f"fix             tstat1 mobile langevin {p.T} {p.T} {1/p.gamma_t:0.4f} {p.rseed}\n"
-				"fix             tstat2 mobile nve/limit 0.1\n"
-			   f"timestep        {p.dt}\n"
-			   f"run             {int(p.nstep_relax)}\n"
-				"unfix           tstat1\n"
-				"unfix           tstat2\n"
-				"reset_timestep  0\n\n")
+			"## Relaxation\n"
+		   f"fix             tstat1 mobile langevin {p.T} {p.T} {1/p.gamma_t:0.4f} {p.rseed}\n"
+			"fix             tstat2 mobile nve/limit 0.1\n"
+		   f"timestep        {p.dt}\n"
+		   f"run             {int(p.nstep_relax)}\n"
+			"unfix           tstat1\n"
+			"unfix           tstat2\n"
+			"reset_timestep  0\n\n")
+
+		#-------- molecule templates --------#
 
 		### molecule template header
 		f.write(
 			"## Molecules\n")
 
-		### bond templates
+		### bond templates (already 0 for forced binding)
 		for ri in range(ntemplate_hybBond):
 			f.write(
 		   f"molecule        hybBond{ri+1}_mol_bondNo react/hybBond{ri+1}_mol_bondNo.txt\n"
 		   f"molecule        hybBond{ri+1}_mol_bondYa react/hybBond{ri+1}_mol_bondYa.txt\n")
 		
-		### angle hybridization templates
+		### angle hybridization templates (always necessary)
 		for ri in range(nreact_angleHyb):
 			f.write(
 		   f"molecule        angleHyb{ri+1:0>{len_nreact_angleHyb}}_mol react/angleHyb{ri+1:0>{len_nreact_angleHyb}}_mol.txt\n")
 
-		### angle dehybridization templates
-		if p.dehyb:
-			for ri in range(nreact_angleCharge):
-				f.write(
+		### angle dehybridization templates  (already 0 for no dehybridization)
+		for ri in range(nreact_angleCharge):
+			f.write(
 		   f"molecule        angleCharge{ri+1:0>{len_nreact_angleCharge}}_mol react/angleCharge{ri+1:0>{len_nreact_angleCharge}}_mol.txt\n")
 		f.write("\n")
+
+		#-------- reactions --------#
 
 		### reaction header
 		f.write(
@@ -524,27 +527,28 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, ntemplate_hybBond, nreact
 		f.write(
 			"fix             reactions all bond/react reset_mol_ids no")
 
-		### bond hybridization reactions
+		### bond hybridization reactions (already 0 for forced binding)
 		for ri in range(ntemplate_hybBond):
 			f.write(
 		   f" &\n                react bondHyb{ri+1} all {int(react_every_bondHyb)} 0.0 {r12_cut_react_hybBond:.1f} hybBond{ri+1}_mol_bondNo hybBond{ri+1}_mol_bondYa react/bondHyb{ri+1}_map.txt")
 		
-		### angle hybridization reactions
+		### angle hybridization reactions (always necessary)
 		for ri in range(nreact_angleHyb):
 			f.write(
 		   f" &\n                react angleHyb{ri+1:0>{len_nreact_angleHyb}} all {int(react_every_angleHyb)} 0.0 {p.r12_cut_hyb:.1f} angleHyb{ri+1:0>{len_nreact_angleHyb}}_mol angleHyb{ri+1:0>{len_nreact_angleHyb}}_mol react/angleHyb{ri+1:0>{len_nreact_angleHyb}}_map.txt custom_charges 4")
 		
-		### dehybridization reactions
-		if p.dehyb:
-			for ri in range(nreact_angleCharge):
-				f.write(
-		   f" &\n                react angleCharge{ri+1:0>{len_nreact_angleCharge}} all {int(react_every_angleDehyb)} {p.r12_cut_hyb:.1f} {int(np.sqrt(3)*p.dbox+1)} angleCharge{ri+1:0>{len_nreact_angleCharge}}_mol angleCharge{ri+1:0>{len_nreact_angleCharge}}_mol react/angleCharge{ri+1:0>{len_nreact_angleCharge}}_map.txt custom_charges 4")
-			for ri in range(ntemplate_hybBond):
-				f.write(
-		   # f" &\n                react angleDehyb{ri+1} all {int(react_every_angleDehyb)} {p.r12_cut_hyb:.1f} {r12_cut_react_hybBond:.1f} hybBond{ri+1}_mol_bondYa hybBond{ri+1}_mol_bondYa react/angleDehyb{ri+1}_map.txt"
+		### dehybridization reactions (already 0 for no dehybridization)
+		for ri in range(nreact_angleCharge):
+			f.write(
+	  	   f" &\n                react angleCharge{ri+1:0>{len_nreact_angleCharge}} all {int(react_every_angleDehyb)} {p.r12_cut_hyb:.1f} {int(np.sqrt(3)*p.dbox+1)} angleCharge{ri+1:0>{len_nreact_angleCharge}}_mol angleCharge{ri+1:0>{len_nreact_angleCharge}}_mol react/angleCharge{ri+1:0>{len_nreact_angleCharge}}_map.txt custom_charges 4")
+		for ri in range(ntemplate_hybBond):
+			f.write(
+		 # f" &\n                react angleDehyb{ri+1} all {int(react_every_angleDehyb)} {p.r12_cut_hyb:.1f} {r12_cut_react_hybBond:.1f} hybBond{ri+1}_mol_bondYa hybBond{ri+1}_mol_bondYa react/angleDehyb{ri+1}_map.txt"
 		   f" &\n                react bondDehyb{ri+1} all {int(react_every_bondDehyb)} {r12_cut_react_hybBond:.1f} {int(np.sqrt(3)*p.dbox+1)} hybBond{ri+1}_mol_bondYa hybBond{ri+1}_mol_bondNo react/bondHyb{ri+1}_map.txt")
-		f.write("\n\n")			
+		f.write("\n\n")
 
+		#-------- end reactions --------#
+	
 		### binding updates
 		f.write(
 			"## Updates\n"
@@ -563,17 +567,17 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, ntemplate_hybBond, nreact
 		### debugging output
 		if p.debug:
 			f.write(
-				"## Debugging\n"
-				"compute         compD1a all bond/local dist engpot\n"
-				"compute         compD1b all property/local btype batom1 batom2\n"
-			   f"dump            dumpD1 all local {int(p.dump_every)} dump_bonds.dat index c_compD1a[1] c_compD1a[2] c_compD1b[1] c_compD1b[2] c_compD1b[3] \n"
-				"dump_modify     dumpD1 append yes\n"
-				"compute         compD2a all angle/local theta eng\n"
-				"compute         compD2b all property/local atype aatom1 aatom2 aatom3\n"
-			   f"dump            dumpD2 all local {int(p.dump_every)} dump_angles.dat index c_compD2a[1] c_compD2a[2] c_compD2b[1] c_compD2b[2] c_compD2b[3] c_compD2b[4]\n"
-				"dump_modify     dumpD2 append yes\n"
-			   f"dump            dumpD3 all custom {int(p.dump_every)} dump_charges.dat id q\n"
-				"dump_modify     dumpD3 sort id append yes\n\n")
+			"## Debugging\n"
+			"compute         compD1a all bond/local dist engpot\n"
+			"compute         compD1b all property/local btype batom1 batom2\n"
+		   f"dump            dumpD1 all local {int(p.dump_every)} dump_bonds.dat index c_compD1a[1] c_compD1a[2] c_compD1b[1] c_compD1b[2] c_compD1b[3] \n"
+			"dump_modify     dumpD1 append yes\n"
+			"compute         compD2a all angle/local theta eng\n"
+			"compute         compD2b all property/local atype aatom1 aatom2 aatom3\n"
+		   f"dump            dumpD2 all local {int(p.dump_every)} dump_angles.dat index c_compD2a[1] c_compD2a[2] c_compD2b[1] c_compD2b[2] c_compD2b[3] c_compD2b[4]\n"
+			"dump_modify     dumpD2 append yes\n"
+		   f"dump            dumpD3 all custom {int(p.dump_every)} dump_charges.dat id q\n"
+			"dump_modify     dumpD3 sort id append yes\n\n")
 
 		### production
 		f.write(
@@ -585,6 +589,7 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, ntemplate_hybBond, nreact
 			"dump_modify     dump1 sort id append yes\n"
 		   f"restart         {int(p.dump_every/2)} restart_binary1.out restart_binary2.out\n\n")
 
+		### run the simulation
 		f.write(
 			"## Go Time\n"
 		   f"run             {int(p.nstep)}\n"
@@ -734,13 +739,9 @@ def writeReactAngleHyb(outReactFold, backbone_neighbors, complements, is_crossov
 	angles_all = []
 	edges_all = []
 
-	### initialize dehyb
-	atoms_all_dehyb = []
-	bonds_all_dehyb = []
-	angles_all_dehyb = []
-	edges_all_dehyb = []
+	#-------- central bead loop --------#
 
-	### loop over candidate beads
+	### loop over all beads
 	for bi in range(p.n_scaf):
 
 		### get neighbors to candidate bead
@@ -914,7 +915,7 @@ def writeReactAngleHyb(outReactFold, backbone_neighbors, complements, is_crossov
 						edges_3to5s[ti].append(bC_5p)
 					bonds_3to5s[ti].append([0,bC,bC_5p])
 
-		#-------- prepare template for comparison --------#
+		#-------- add (maybe) generated templates to template list --------#
 
 		ntemplate = len(atoms_5to3s)
 		for ti in range(ntemplate):
@@ -930,8 +931,6 @@ def writeReactAngleHyb(outReactFold, backbone_neighbors, complements, is_crossov
 				symmetric = True
 			else:
 				symmetric = False
-
-			#-------- add to hybridization templates --------#
 
 			atoms_all.append(atoms_5to3)
 			bonds_all.append(bonds_5to3)
@@ -1019,38 +1018,12 @@ def writeReactAngleHyb(outReactFold, backbone_neighbors, complements, is_crossov
 					abae_zipped.pop()
 				atoms_all,bonds_all,angles_all,edges_all = unzip4(abae_zipped)
 
-			#-------- add to dehybridization templates --------#
+	#-------- end bead loop --------#
 
-			if p.dehyb:
-
-				angles_5to3_copy = copy.deepcopy(angles_5to3)
-				angles_3to5_copy = copy.deepcopy(angles_3to5)
-
-				if not p.circularScaf:
-					if bi == p.n_scaf-1:
-						angles_5to3_copy[0][2] = 2
-						angles_3to5_copy[0][2] = 0
-					if bi == 0:
-						angles_5to3_copy[0][2] = 0
-						angles_3to5_copy[0][2] = 2
-
-				atoms_all_dehyb.append(atoms_5to3)
-				bonds_all_dehyb.append(bonds_5to3)
-				angles_all_dehyb.append(angles_5to3_copy)
-				edges_all_dehyb.append(edges_5to3)
-				atoms_all_dehyb.append(atoms_3to5)
-				bonds_all_dehyb.append(bonds_3to5)
-				angles_all_dehyb.append(angles_3to5_copy)
-				edges_all_dehyb.append(edges_3to5)
-				abae_zipped = [[a,b,c,d] for a,b,c,d in zip(atoms_all_dehyb,bonds_all_dehyb,angles_all_dehyb,edges_all_dehyb)]
-				abae_zipped = removeDuplicateEntries(abae_zipped)
-				if not symmetric:
-					abae_zipped.pop()
-				atoms_all_dehyb,bonds_all_dehyb,angles_all_dehyb,edges_all_dehyb = unzip4(abae_zipped)
-
-	#-------- write hybridization files --------#
-
+	### for nice debug output
 	if p.debug: print()
+
+	### loop over templates to write files
 	nreact = len(atoms_all)
 	len_nreact = len(str(nreact))
 	for ri in range(nreact):
@@ -1153,13 +1126,31 @@ def writeReactAngleHyb(outReactFold, backbone_neighbors, complements, is_crossov
 def writeReactAngleCharge(outReactFold, backbone_neighbors, complements, is_crossover, p):
 	print("Writing angle dehybridization react files...")
 
+	### determine if scaffold ends (if they exist) are bridged
+	bridgeEnds = False
+	if not p.circularScaf and getAssembledNeighbors(0,backbone_neighbors,complements)[0] != -1:
+		bridgeEnds = True
+	nconstraint = 5 if bridgeEnds else 3
+
+	### only necessary if including dehybridization
+	if not p.dehyb:
+
+		### warning for end bridging
+		if bridgeEnds:
+			print("Flag: Scaffold ends are bridged, but dehybridization is is off, so end bridging is permenant.")
+
+		### no reactions
+		return 0, False
+
 	### initialize
 	atoms_all = []
 	bonds_all = []
 	angles_all = []
 	edges_all = []
 
-	### core topology - three staples, two staple backbone bonds
+	#-------- three staples, two staple backbone bonds --------#
+
+	### core topology
 	atoms = [ [0,0,0], [0,0,1], [0,0,2], [1,-1,3], [1,-1,4], [1,-1,5], [0,-1,6], [0,-1,7] ]
 	bonds = [ [0,0,1], [0,1,2], [1,0,5], [1,1,4], [1,2,3], [0,6,0], [0,2,7], [0,3,4], [0,4,5] ]
 	angles = [ [2, 0, 4, 2] ]
@@ -1221,7 +1212,9 @@ def writeReactAngleCharge(outReactFold, backbone_neighbors, complements, is_cros
 		angles_all.append(angles_copy)
 		edges_all.append(copy.deepcopy(edges))
 
-	### core topology - three staples, one staple backbone bond
+	#-------- three staples, one staple backbone bond --------#
+
+	### core topology
 	atoms = [ [0,0,0], [0,0,1], [0,0,2], [1,-1,3], [1,-1,4], [1,-1,5], [0,-1,6], [0,-1,7] ]
 	bonds = [ [0,0,1], [0,1,2], [1,0,5], [1,1,4], [1,2,3], [0,6,0], [0,2,7], [0,3,4] ]
 	angles = [ [2, 0, 4, 2] ]
@@ -1306,7 +1299,9 @@ def writeReactAngleCharge(outReactFold, backbone_neighbors, complements, is_cros
 		angles_all.append(angles_copy)
 		edges_all.append(copy.deepcopy(edges))
 
-	### core topology - three staples, no staple backbone bonds
+	#-------- three staples, no staple backbone bonds --------#
+
+	### core topology
 	atoms = [ [0,0,0], [0,0,1], [0,0,2], [1,-1,3], [1,-1,4], [1,-1,5], [0,-1,6], [0,-1,7] ]
 	bonds = [ [0,0,1], [0,1,2], [1,0,5], [1,1,4], [1,2,3], [0,6,0], [0,2,7] ]
 	angles = [ [2, 0, 4, 2] ]
@@ -1368,7 +1363,9 @@ def writeReactAngleCharge(outReactFold, backbone_neighbors, complements, is_cros
 		angles_all.append(angles_copy)
 		edges_all.append(copy.deepcopy(edges))
 
-	### core topology - two staples, one staple backbone bond
+	#-------- two staples, one staple backbone bond --------#
+
+	### core topology
 	atoms = [ [0,0,0], [0,0,1], [0,0,2], [1,-1,3], [1,-1,4], [0,-1,5], [0,-1,6] ]
 	bonds = [ [0,0,1], [0,1,2], [1,1,4], [1,2,3], [0,5,0], [0,2,6], [0,3,4] ]
 	angles = [ [0, 0, 3, 2] ]
@@ -1392,7 +1389,9 @@ def writeReactAngleCharge(outReactFold, backbone_neighbors, complements, is_cros
 		angles_all.append(copy.deepcopy(angles))
 		edges_all.append(copy.deepcopy(edges))
 
-	### core topology - two staples, no staple backbone bond
+	#-------- two staples, no staple backbone bonds --------#
+
+	### core topology
 	atoms = [ [0,0,0], [0,0,1], [0,0,2], [1,-1,3], [1,-1,4], [0,-1,5], [0,-1,6] ]
 	bonds = [ [0,0,1], [0,1,2], [1,0,4], [1,1,3], [0,5,0], [0,2,6] ]
 	angles = [ [0, 0, 3, 2] ]
@@ -1416,8 +1415,13 @@ def writeReactAngleCharge(outReactFold, backbone_neighbors, complements, is_cros
 		angles_all.append(copy.deepcopy(angles))
 		edges_all.append(copy.deepcopy(edges))
 
-	### linear scaffold additions
+	#-------- end central bead templates --------#
+
+
+	### for nice debug output
 	if p.debug: print()
+
+	### linear scaffold additions
 	if not p.circularScaf:
 
 		#-------- disconected, 5' end --------#
@@ -1549,11 +1553,7 @@ def writeReactAngleCharge(outReactFold, backbone_neighbors, complements, is_cros
 		abae_zipped = removeDuplicateEntries(abae_zipped)
 		atoms_all,bonds_all,angles_all,edges_all = unzip4(abae_zipped)
 
-	### determine if bridging ends need to be avoided
-	bridgeEnds = False
-	if not p.circularScaf and getAssembledNeighbors(0,backbone_neighbors,complements)[0] != -1:
-		bridgeEnds = True
-	nconstraint = 5 if bridgeEnds else 3
+		#-------- end templates for ends --------#
 
 	### loop over reactions
 	nreact = len(atoms_all)

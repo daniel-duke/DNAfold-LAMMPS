@@ -37,9 +37,14 @@ class parameters:
 		self.nbead = 0
 		self.nstrand = 0
 
-		### check force binding
+		### check force binding and staple copies
 		if self.stap_copies > 1 and self.forceBind:
 			print("Flag: Cannot force bind when using multiple staple copies, removing forced binding.")
+			self.forceBind = False
+
+		### check force binding and staple copies
+		if self.forceBind and self.dehyb:
+			print("Flag: Bond dehybridization inconsistent with forced binding, only dehybridizing angles.")
 			self.forceBind = False
 
 		### check dump frequency
