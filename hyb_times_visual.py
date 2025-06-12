@@ -175,7 +175,7 @@ def writeOvito(ovitoFile, outGeoFile, outDatFile):
 	traj_mod.source.load(outDatFile)
 	pipeline.modifiers.append(traj_mod)
 
-	### set scaffold and staple particle radii and bond widths
+	### set scaffold and staple particle radii and bond widths (small scaffold)
 	pipeline.modifiers.append(ComputePropertyModifier(output_property='Radius',expressions=['(ParticleType==1)?0.6:1']))
 	pipeline.modifiers.append(ComputePropertyModifier(operate_on='bonds',output_property='Width',expressions=['(@1.ParticleType==1)?1.2:2']))
 

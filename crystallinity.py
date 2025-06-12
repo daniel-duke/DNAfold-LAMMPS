@@ -105,6 +105,7 @@ def main():
 
 			### loop through simulations
 			S_allSim = np.zeros((nsim,nstep_use))
+			acn_allSim = np.zeros(nsim)
 			RMSD_allSim = np.zeros((nsim,nstep_use))
 			for i in range(nsim):
 
@@ -112,6 +113,7 @@ def main():
 				datFile = simFolds[i] + "analysis/trajectory_centered.dat"
 				points, _, dbox = ars.readAtomDump(datFile, nstep_skip, coarse_time, bdis=bdis, nstep_max=nstep_use); print()
 				S_allSim[i] = utils.calcCrystallinity(points, dbox)
+				acn_allSim[i] = estimate_acn(points[-1])
 				if calcRMSD:
 					RMSD_allSim[i] = utils.calcRMSD(points, r_ideal)
 
@@ -136,14 +138,14 @@ def main():
 		### store results
 		resultsFile = "analysis/crystallinity_vars.pkl"
 		with open(resultsFile, 'wb') as f:
-			pickle.dump([S_allSim, RMSD_allSim, dump_every], f)
+			pickle.dump([S_allSim, acn_allSim, RMSD_allSim, dump_every], f)
 
 	### load results
 	else:
 		resultsFile = "analysis/crystallinity_vars.pkl"
 		ars.testFileExist(resultsFile,"results")
 		with open(resultsFile, 'rb') as f:
-			[S_allSim, RMSD_allSim, dump_every] = pickle.load(f)
+			[S_allSim, acn_allSim, RMSD_allSim, dump_every] = pickle.load(f)
 
 
 ################################################################################
@@ -156,9 +158,16 @@ def main():
 	### report best simulations
 	if copiesFile is not None:
 		copyNames = ars.readCopies(copiesFile)[0]
-		sorted_results = sorted(zip(S_allSim[:,-1],copyNames), reverse=True)
-		for S_final, copyName in sorted_results:
-			print(f"{copyName}: {S_final:0.4f}")
+		sorted_results = sorted(zip(S_allSim[:,-1],acn_allSim,copyNames), reverse=True)
+		for S_final, acn, copyName in sorted_results:
+			print(f"{copyName}: {S_final:0.4f}, {acn:0.4f}")
+
+	### knot
+	ars.magicPlot()
+	plt.figure("ACN",figsize=(8,6))
+	plt.scatter(acn_allSim,S_allSim[:,-1])
+	plt.xlabel("Average Crossing Number")
+	plt.ylabel("Final Crystallinity")
 
 	### plot
 	plotCrystallinity(S_allSim, dump_every)
@@ -195,7 +204,7 @@ def plotCrystallinity(S_allSim, dump_every):
 	ranks = [ sorted(S_allSim[:,-1]).index(x) + 1 for x in S_allSim[:,-1] ]
 
 	### plot
-	ars.magicPlot(pubReady=True)
+	ars.magicPlot()
 	plt.figure("S",figsize=(8,6))
 	if nsim > 1:
 		for i in range(nsim):
@@ -205,9 +214,9 @@ def plotCrystallinity(S_allSim, dump_every):
 		if plotSEM: plt.fill_between(time,S_avg-S_sem,S_avg+S_sem,color='k',alpha=0.4,edgecolor='none')
 	plt.plot(time,S_avg,'k',linewidth=4)
 	plt.plot(time[-1],S_avg[-1],'o',color='k')
+	plt.ylim(0,0.8)
 	plt.xlabel("Time [$s$]")
 	plt.ylabel("Crystallinity")
-	plt.ylim(0,0.8)
 
 
 ### plot average Landau-De Gennes crystallinity parameter
@@ -246,6 +255,61 @@ def plotRMSD(RMSD_allSim, dump_every):
 	plt.xlabel("Time [$s$]")
 	plt.ylabel("$RMSD$")
 	plt.title("Root Mean Square Displacement")
+
+
+################################################################################
+### Knotty
+
+def generate_random_projection():
+    """Generate a random 3D-to-2D orthonormal projection matrix."""
+    vec = np.random.randn(3)
+    vec /= np.linalg.norm(vec)
+    if np.allclose(vec, [0, 0, 1]):
+        tmp = np.array([0, 1, 0])
+    else:
+        tmp = np.array([0, 0, 1])
+    right = np.cross(tmp, vec)
+    right /= np.linalg.norm(right)
+    up = np.cross(vec, right)
+    return np.stack([right, up])  # 2x3
+
+def project_chain(chain, proj_matrix):
+    return chain @ proj_matrix.T  # (N,3) x (3,2) -> (N,2)
+
+def fast_segments_intersect(a1, a2, b1, b2):
+    """Vectorized 2D segment intersection test using orientation."""
+    def orientation(p, q, r):
+        return np.sign((q[0] - p[0]) * (r[1] - p[1]) -
+                       (q[1] - p[1]) * (r[0] - p[0]))
+
+    o1 = orientation(a1, a2, b1)
+    o2 = orientation(a1, a2, b2)
+    o3 = orientation(b1, b2, a1)
+    o4 = orientation(b1, b2, a2)
+
+    return (o1 != o2) and (o3 != o4)
+
+def count_crossings(proj_chain):
+    n = len(proj_chain)
+    crossings = 0
+    for i in range(n):
+        p1, p2 = proj_chain[i], proj_chain[(i + 1) % n]
+        for j in range(i + 2, n):
+            if abs(i - j) == 1 or (i == 0 and j == n - 1):
+                continue
+            q1, q2 = proj_chain[j], proj_chain[(j + 1) % n]
+            if fast_segments_intersect(p1, p2, q1, q2):
+                crossings += 1
+    return crossings
+
+def estimate_acn(chain, num_projections=100):
+    total_crossings = 0
+    for _ in range(num_projections):
+        proj_matrix = generate_random_projection()
+        proj_chain = project_chain(chain, proj_matrix)
+        total_crossings += count_crossings(proj_chain)
+    return total_crossings / num_projections
+
 
 ### run the script
 if __name__ == "__main__":

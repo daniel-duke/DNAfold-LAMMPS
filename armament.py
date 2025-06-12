@@ -81,10 +81,11 @@ def readAtomDump(datFile, nstep_skip=0, coarse_time=1, bdis="all", coarse_points
 				if i == 0:
 					col2s[point_count] = int(line[1])
 					groups[point_count] = g + 1
-				points[i,point_count] = [ ars.applyPBC(float(i)%1-1/2,1)*dbox for i in line[2:5] ]
+				point = np.array(line[2:5],dtype=float)
+				points[i,point_count] = ars.applyPBC(point-1/2,1)*dbox
 				point_count += 1
 		if i%1000 == 0 and i != 0:
-			print(f"processed {i} steps...")
+			print(f"Processed {i} steps...")
 
 	### results
 	if len(bdis) == 1:
@@ -161,7 +162,7 @@ def readGeo(geoFile):
 				nangle = 0
 
 	### get atom information
-	points = np.zeros((natom,3))
+	r = np.zeros((natom,3))
 	ids = np.zeros(natom, dtype=int)
 	molecules = np.zeros(natom, dtype=int)
 	types = np.zeros(natom, dtype=int)
@@ -183,14 +184,14 @@ def readGeo(geoFile):
 
 			### assume molecular atom style
 			if len(line) == 6 or len(line) == 9:
-				points[ai] = line[3:6]
+				r[ai] = line[3:6]
 
 			### assume full atom style
 			elif len(line) == 7 or len(line) == 10:
 				if i == 0:
 					is_charged = True
 				charges[ai] = line[3]
-				points[ai] = line[4:7]
+				r[ai] = line[4:7]
 
 			### throw error
 			else:
@@ -226,9 +227,9 @@ def readGeo(geoFile):
 
 	### results
 	if not is_charged:
-		return points, molecules, types, bonds, angles
+		return r, molecules, types, bonds, angles
 	else:
-		return points, molecules, types, charges, bonds, angles
+		return r, molecules, types, charges, bonds, angles
 
 
 ### read 3D box diameter from geometry file
@@ -282,7 +283,7 @@ def readCopies(copiesFile):
 
 
 ### write lammps-style geometry
-def writeGeo(geoFile, dbox3, points, molecules="auto", types="auto", bonds="none", angles="none", natomType="auto", nbondType="auto", nangleType="auto", masses="auto", charges="none", precision=2):
+def writeGeo(geoFile, dbox3, r, molecules="auto", types="auto", bonds="none", angles="none", natomType="auto", nbondType="auto", nangleType="auto", masses="auto", charges="none", precision=2):
 
 	### notes
 	# by convention, molecule/type/bond/angle indexing starts at 1, however, there is
@@ -291,7 +292,7 @@ def writeGeo(geoFile, dbox3, points, molecules="auto", types="auto", bonds="none
 	# assumes four decimal points is sufficiently precise for setting charge.
 
 	### count atoms
-	natom = len(points)
+	natom = len(r)
 
 	### interpret input
 	if ars.isnumber(dbox3):
@@ -388,9 +389,9 @@ def writeGeo(geoFile, dbox3, points, molecules="auto", types="auto", bonds="none
 					f"{int(types[i]):<{len_natomType}} ")
 			if is_charged:
 				f.write(f"{charges[i]:>{len_charge+6}.4f}  ") 
-			f.write(f"{points[i,0]:>{len_dbox3+precision+2}.{precision}f} " + \
-					f"{points[i,1]:>{len_dbox3+precision+2}.{precision}f} " + \
-					f"{points[i,2]:>{len_dbox3+precision+2}.{precision}f}\n")
+			f.write(f"{r[i,0]:>{len_dbox3+precision+2}.{precision}f} " + \
+					f"{r[i,1]:>{len_dbox3+precision+2}.{precision}f} " + \
+					f"{r[i,2]:>{len_dbox3+precision+2}.{precision}f}\n")
 		f.write("\n")
 
 		if nbond:
@@ -524,43 +525,13 @@ def centerPointsMolecule(points, molecules, dboxs, center=1, unwrap=True):
 			for j in range(npoint):
 				ref = molecule_coms_centered[molecules[j]-1,:]
 				points_centered[i,j,:] = ref + ars.applyPBC(points_centered[i,j,:]-ref, dboxs[i])
+
+		### progress update
+		if i%1000 == 0 and i != 0:
+			print(f"Centered {i} steps...")
+
+	### result
 	return points_centered
-
-
-### calculate center of mass, excluding dummy particles
-def calcCOMnoDummy(r, dbox):
-	r_trim = np.zeros((0,3))
-	for i in range(len(r)):
-		if any(r[i]!=[0,0,0]):
-			r_trim = np.append(r_trim, [r[i]], axis=0)
-	if len(r_trim) == 0:
-		return np.zeros(3)
-	else:
-		com = ars.calcCOM(r_trim, dbox)
-		return com 
-
-
-### calculate center of mass, using method from Bai and Breen 2008
-def calcCOM(r, dbox):
-	xi_bar = np.mean( np.cos(2*np.pi*(r/dbox+1/2)), axis=0 )
-	zeta_bar = np.mean( np.sin(2*np.pi*(r/dbox+1/2)), axis=0 )
-	theta_bar = np.arctan2(-zeta_bar, -xi_bar) + np.pi
-	r_ref = dbox*(theta_bar/(2*np.pi)-1/2)
-	com = r_ref + np.mean( ars.applyPBC(r-r_ref, dbox), axis=0 )
-	return com
-
-
-### calculate optimum number of histogram bins
-def optbins(A, maxM):
-	N = len(A)
-	logp = np.zeros(maxM)
-	for M in range(1, maxM+1):
-		n = np.histogram(A,bins=M)[0]
-		part1 = N*np.log(M) + gammaln(M/2) - gammaln(N+M/2)
-		part2 = -M*gammaln(1/2) + np.sum(gammaln(n+1/2))
-		logp[M-1] = part1 + part2
-	optM = np.argmax(logp) + 1
-	return optM
 
 
 ### calculate sem assuming independent measurements
@@ -570,10 +541,7 @@ def calcSEM(A):
 
 ### check for overlap between a bead and a list of beads
 def checkOverlap(r0, r_other, sigma, dbox):
-	for bi in range(len(r_other)):
-		if np.linalg.norm(ars.applyPBC(r0-r_other[bi], dbox)) < sigma:
-			return True
-	return False
+	return np.any(np.linalg.norm(ars.applyPBC(r_other-r0, dbox),axis=1) < sigma)
 
 
 ### align positions with principal components
@@ -701,6 +669,32 @@ def isnumber(x):
 		return False
 
 
+### calculate center of mass, excluding dummy particles
+def calcCOMnoDummy(r, dbox):
+	r_trim = np.zeros((0,3))
+	for i in range(len(r)):
+		if any(r[i]!=[0,0,0]):
+			r_trim = np.append(r_trim, [r[i]], axis=0)
+	if len(r_trim) == 0:
+		return np.zeros(3)
+	else:
+		com = ars.calcCOM(r_trim, dbox)
+		return com 
+
+
+### calculate optimum number of histogram bins
+def optbins(A, maxM):
+	N = len(A)
+	logp = np.zeros(maxM)
+	for M in range(1, maxM+1):
+		n = np.histogram(A,bins=M)[0]
+		part1 = N*np.log(M) + gammaln(M/2) - gammaln(N+M/2)
+		part2 = -M*gammaln(1/2) + np.sum(gammaln(n+1/2))
+		logp[M-1] = part1 + part2
+	optM = np.argmax(logp) + 1
+	return optM
+
+
 ### check if variable is an array (both list and numpy array work)
 def isarray(x):
 	if isinstance(x, list):
@@ -709,5 +703,15 @@ def isarray(x):
 		return True
 	else:
 		return False
+
+
+### calculate center of mass, using method from Bai and Breen 2008
+def calcCOM(r, dbox):
+	xi_bar = np.mean( np.cos(2*np.pi*(r/dbox+1/2)), axis=0 )
+	zeta_bar = np.mean( np.sin(2*np.pi*(r/dbox+1/2)), axis=0 )
+	theta_bar = np.arctan2(-zeta_bar, -xi_bar) + np.pi
+	r_ref = dbox*(theta_bar/(2*np.pi)-1/2)
+	com = r_ref + np.mean( ars.applyPBC(r-r_ref, dbox), axis=0 )
+	return com
 
 

@@ -30,13 +30,11 @@ def main():
 	if useMyFiles:
 
 		### chose design
-		desID = "2HBx4"
-
-		### analysis options
-		confTag = None			# if using oxdna position, tag for configuration file
-		rstapTag = ""			# if reserving staples, tag for reserved staples file
-		circularScaf = True		# whether to add bond between scaffold ends
-		cornerView = False		# whether to view the origami at an angle
+		desID = "triSS_edit"		# design identificaiton
+		confTag = "_ideal"			# if using oxdna position, tag for configuration file (None for caDNAno positions)
+		rstapTag = "_baigl"		# if reserving staples, tag for reserved staples file (None for all staples)
+		circularScaf = True			# whether to add bond between scaffold ends
+		cornerView = False			# whether to view the origami at an angle
 
 		### get input files
 		cadFile = utilsLocal.getCadFile(desID)
@@ -99,7 +97,6 @@ def main():
 	if position_src == "cadnano":
 		r, strands = utils.initPositionsCaDNAno(cadFile)
 	if position_src == "oxdna":
-		print(cadFile)
 		r, strands = utils.initPositionsOxDNA(cadFile, topFile, confFile)
 
 	### prepare the data for nice redering
@@ -139,7 +136,7 @@ def writeOvito(ovitoFile, outGeoFile, cornerView):
 		viewport.camera_up = (0,0,1)
 		viewport.zoom_all()
 
-	### set scaffold and staple particle radii and bond widths
+	### set scaffold and staple particle radii and bond widths (small scaffold)
 	pipeline.modifiers.append(ComputePropertyModifier(output_property='Radius',expressions=['(ParticleType==1)?0.6:1']))
 	pipeline.modifiers.append(ComputePropertyModifier(operate_on='bonds',output_property='Width',expressions=['(BondType==1)?1.2:2']))
 

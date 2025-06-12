@@ -76,12 +76,13 @@ def main():
 	pipeline.modifiers.append(ComputePropertyModifier(output_property='Color',expressions=[f'(ParticleType==1)?{scaf_color[0]}/255:{stap_color[0]}/255',f'(ParticleType==1)?{scaf_color[1]}/255:{stap_color[1]}/255',f'(ParticleType==1)?{scaf_color[2]}/255:{stap_color[2]}/255']))
 	
 	### remove reserved staples, or all staples
-	pipeline.modifiers.append(ComputePropertyModifier(output_property='Selection',expressions=['Position.X==0']))
+	pipeline.modifiers.append(ComputePropertyModifier(output_property='Selection',expressions=['Position.X==0 && Position.Y==0 && Position.Z==0']))
 	pipeline.modifiers.append(ComputePropertyModifier(enabled=False,output_property='Selection',expressions=['ParticleType!=1']))
 	pipeline.modifiers.append(DeleteSelectedModifier())
 
 	### write ovito file
 	ovitoFile = "analysis/vis_folding.ovito"
+	if nsim == 1: ovitoFile = simFolds[0] + ovitoFile
 	scene.save(ovitoFile)
 	pipeline.remove_from_scene()
 

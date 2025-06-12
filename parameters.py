@@ -22,6 +22,7 @@ class parameters:
 		self.stap_copies = params['stap_copies']
 		self.nnt_per_bead = params['nnt_per_bead']
 		self.T = params['T']
+		self.T_relax = params['T_relax']
 		self.gamma_t = 6*np.pi*params['visc']*params['r_h_bead']
 		self.sigma = params['sigma']
 		self.epsilon = 6.96*params['epsilon']
@@ -69,5 +70,6 @@ class parameters:
 			f.write(f"reserveStap     {self.reserveStap}\n")
 			f.write(f"stap_copies     {self.stap_copies}\n")
 			f.write(f"T [K]           {self.T}\n")
+			f.write(f"T_relax [K]     {self.T_relax}\n")
 			f.write(f"U_hyb [kcal]    {self.U_hyb/6.96:0.2f}\n")
 

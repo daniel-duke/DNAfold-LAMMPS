@@ -21,7 +21,7 @@ def getSimFolds(copiesFile=None, simFold=None, rseed=None):
 	else:
 		nsim = 1
 		if simFold is not None:
-			simFolds = [ args.simFold + "/" ]
+			simFolds = [ simFold + "/" ]
 		else:
 			simFolds = [ f"sim{rseed:02.0f}" + "/" ]
 	return simFolds, nsim
