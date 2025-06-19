@@ -5,6 +5,7 @@ import argparse
 import parameters
 import numpy as np
 import random
+import itertools
 import copy
 import json
 import sys
@@ -27,10 +28,9 @@ import os
   # the main
 
 # To Do
-# find optimal tradeoff between commuication cutoff and bond break, find way
-  # to make angle dehybridizations occur at 2.0 (not 4.0) cutoff, add reactions
-  # for connecting and disconnecting scaffold bonds, parameterize 90 degree
-  # angular potential, reactions that shortens crossover bond length.
+# find optimal tradeoff between commuication cutoff and bond break, parameterize
+  # 90 degree angular potential, reactions that shortens crossover bond length; 
+  # make sure bridge is accurate for multiple staple copies.
 
 
 ################################################################################
@@ -49,16 +49,16 @@ def main():
 		simTag = ""					# added to desID to get name of simulation folder
 		simType = "experiment"		# where create simulation folder
 		rstapTag = None				# if reserving staples, tag for reserved staples file (None for all staples)
-		rseed = 1					# random seed (also used for naming precise simulation folder)
+		rseed = 2					# random seed (also used for naming precise simulation folder)
 
 		### choose parameters
-		nstep			= 4E6		# steps		- number of simulation steps
+		nstep			= 1E6		# steps		- number of simulation steps
 		nstep_relax		= 1E5		# steps		- number of steps for relaxation
 		dump_every		= 1E4		# steps		- number of steps between positions dumps
 		dbox			= 40		# nm		- periodic boundary diameter
 		forceBind		= False		# bool		- whether to force hybridization
 		startBound		= False		# bool		- whether to start at caDNAno positions
-		circularScaf	= True		# bool		- whether the scaffold is circular
+		circularScaf	= False		# bool		- whether the scaffold is circular
 		stap_copies		= 1 		# int		- number of copies for each staples
 
 		### get input files
@@ -125,13 +125,13 @@ def main():
 	composeGeoVis(outSimFold, strands, backbone_neighbors, r, p)
 
 	### write react files
-	ntemplate_hybBond = writeReactHybBond(outReactFold, backbone_neighbors, complements, p)
+	writeReactHybBond(outReactFold, backbone_neighbors, complements, p)
 	nreact_angleHyb = writeReactAngleHyb(outReactFold, backbone_neighbors, complements, is_crossover, p)
 	nreact_chargeDehyb, bridgeEnds = writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_crossover, p)
-	if bridgeEnds: writeReactBridgeBond(outReactFold, complements, is_crossover, p)
+	if bridgeEnds: writeReactBridgeBond(outReactFold, backbone_neighbors, complements, is_crossover, p)
 
 	### write lammps input file
-	writeInput(outSimFold, is_crossover, nhyb, nangle, ntemplate_hybBond, nreact_angleHyb, nreact_chargeDehyb, bridgeEnds, p)
+	writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_angleHyb, nreact_chargeDehyb, bridgeEnds, p)
 
 
 ################################################################################
@@ -152,7 +152,7 @@ def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, nstep=None, ns
 		'dump_every': 	dump_every,		# steps			- number of steps between positions dumps
 		'dt': 			0.01,			# ns			- integration time step
 		'dbox': 		dbox,			# nm			- periodic boundary diameter
-		'debug': 		True,			# bool			- whether to include debugging output
+		'debug': 		False,			# bool			- whether to include debugging output
 		'dehyb': 		True,			# bool			- whether to include dehybridization reactions (unnecessary for 1 staple copy)
 		'forceBind': 	forceBind,		# bool			- whether to force hybridization (not applied if >1 staple copies)
 		'startBound': 	startBound,		# bool			- whether to start at caDNAno positions
@@ -167,7 +167,7 @@ def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, nstep=None, ns
 		'r12_eq':		2.72,			# nm			- equilibrium bead separation
 		'k_x': 			120.0,			# kcal/mol/nm2	- backbone spring constant (standard definition)
 		'r12_cut_hyb':	2.0,			# nm			- hybridization potential cutoff radius
-		'U_hyb':		10.0,			# kcal/mol		- depth of hybridization potential
+		'U_hyb':		8.0,			# kcal/mol		- depth of hybridization potential
 		'dsLp': 		50.0			# nm			- persistence length of dsDNA
 	}
 
@@ -274,7 +274,7 @@ def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossove
 	print("Writing simulation geometry file...")
 
 	### currently, oxDNA positions only available through local file structure
-	oxdnaPositions = True
+	oxdnaPositions = False
 	desID = "triSS_edit"
 	confTag = "_ideal"
 
@@ -412,7 +412,7 @@ def composeGeoVis(outSimFold, strands, backbone_neighbors, r, p):
 
 
 ### write lammps input file for lammps
-def writeInput(outSimFold, is_crossover, nhyb, nangle, ntemplate_hybBond, nreact_angleHyb, nreact_chargeDehyb, bridgeEnds, p):
+def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_angleHyb, nreact_chargeDehyb, bridgeEnds, p):
 	print("Writing input file...")
 
 	### computational parameters
@@ -422,11 +422,16 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, ntemplate_hybBond, nreact
 	F_forceBind				= 1		# kcal/mol/nm	- force to apply for forced binding
 	r12_cut_react_hybBond	= 4		# nm			- cutoff radius for potential hybridization bonds
 	react_every_bondHyb		= 1E2	# steps			- how often to check for new hybridization bonds
+	react_every_angleHyb	= 1E4	# steps			- how often to check for new angles
+	react_every_chargeDehyb	= 1E2	# steps			- how often to check for deactivating charges (makes eligible for angle and bond removal)
+	react_every_angleDehyb	= 1E2	# steps			- how often to check for removing angles
 	react_every_bondDehyb	= 1E2	# steps			- how often to check for removing hybridization bonds
-	react_every_angleHyb	= 1E4	# steps			- how often to check for new hybridization angles
-	react_every_angleDehyb	= 1E2	# steps			- how often to check for removing hybridization angles
 	comm_cutoff				= 12	# nm			- communication cutoff (relevant for parallelization)
 	U_barrier_comm			= 10	# kcal/mol		- energy barrier to exceeding communication cutoff
+
+	### adjust comm_cutoff for forced binding
+	if p.forceBind:
+		comm_cutoff = int(np.sqrt(3)*p.dbox+1)
 
 	### count digits
 	len_nreact_angleHyb = len(str(nreact_angleHyb))
@@ -480,8 +485,7 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, ntemplate_hybBond, nreact
 			"bond_coeff      3 zero\n")
 
 		### angled interactions
-		if nangle:
-			f.write(
+		if nangle: f.write(
 		   f"angle_style     harmonic\n"
 		   f"angle_coeff     1 {p.k_theta/2:0.2f} 180\n"
 		   f"angle_coeff     2 {p.k_theta/2:0.2f} 90\n")
@@ -491,12 +495,14 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, ntemplate_hybBond, nreact
 			"variable        varQ atom q\n"
 			"variable        varMolID atom mol\n"
 		   f"variable        varStrand atom \"(id <= {p.n_scaf})*1.0 + (id > {p.n_scaf})*q\"\n"
+			"compute         nhyb all nbond/atom bond/type 2\n"
+			"variable        nhyb atom c_nhyb\n"
+		   f"group           scaf id <= {p.n_scaf}\n"
 		   f"group           real id <= {p.nbead}\n"
 			"group           mobile type 1 2\n\n")
 
 		### relax everything
-		if p.nstep_relax > 0:
-			f.write(
+		if p.nstep_relax > 0: f.write(
 			"## Relaxation\n"
 		   f"fix             tstat1 mobile langevin {p.T_relax} {p.T_relax} {1/p.gamma_t:0.4f} {p.rseed}\n"
 			"fix             tstat2 mobile nve/limit 0.1\n"
@@ -512,26 +518,32 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, ntemplate_hybBond, nreact
 		f.write(
 			"## Molecules\n")
 
-		### bond templates (already 0 for forced binding)
-		for ri in range(ntemplate_hybBond):
-			f.write(
-		   f"molecule        hybBond{ri+1}_mol_bondNo react/hybBond{ri+1}_mol_bondNo.txt\n"
-		   f"molecule        hybBond{ri+1}_mol_bondYa react/hybBond{ri+1}_mol_bondYa.txt\n")
+		### bond templates
+		if not p.forceBind: f.write(
+		   f"molecule        hybBondMid_mol_bondNo react/hybBondMid_mol_bondNo.txt\n"
+		   f"molecule        hybBondMid_mol_bondYa react/hybBondMid_mol_bondYa.txt\n")
+		if not p.forceBind and not p.circularScaf: f.write(
+		   f"molecule        hybBondEnd_mol_bondNo react/hybBondEnd_mol_bondNo.txt\n"
+		   f"molecule        hybBondEnd_mol_bondYa react/hybBondEnd_mol_bondYa.txt\n")
 
-		### scaffold end bridging templates
-		if bridgeEnds:
-			f.write(
-		   f"molecule        bridge_mol_bondNo react/bridge_mol_bondNo.txt\n"
-		   f"molecule        bridge_mol_bondYa react/bridge_mol_bondYa.txt\n")
+		### bridge creating templates
+		if bridgeEnds: f.write(
+		   f"molecule        bridgeEnds_mol_bondNo react/bridgeEnds_mol_bondNo.txt\n"
+		   f"molecule        bridgeEnds_mol_bondYa react/bridgeEnds_mol_bondYa.txt\n")
+
+		### bridge breaking templates
+		if bridgeEnds and p.dehyb: f.write(
+		   f"molecule        unbridge1_mol_bondYa react/unbridge1_mol_bondYa.txt\n"
+		   f"molecule        unbridge1_mol_bondNo react/unbridge1_mol_bondNo.txt\n"
+		   f"molecule        unbridge2_mol_bondYa react/unbridge2_mol_bondYa.txt\n"
+		   f"molecule        unbridge2_mol_bondNo react/unbridge2_mol_bondNo.txt\n")
 		
-		### angle hybridization templates (always necessary)
-		for ri in range(nreact_angleHyb):
-			f.write(
+		### angle hybridization templates
+		for ri in range(nreact_angleHyb): f.write(
 		   f"molecule        angleHyb{ri+1:0>{len_nreact_angleHyb}}_mol react/angleHyb{ri+1:0>{len_nreact_angleHyb}}_mol.txt\n")
 
-		### angle dehybridization templates  (already 0 for no dehybridization)
-		for ri in range(nreact_chargeDehyb):
-			f.write(
+		### angle dehybridization templates
+		for ri in range(nreact_chargeDehyb): f.write(
 		   f"molecule        chargeDehyb{ri+1:0>{len_nreact_chargeDehyb}}_mol react/chargeDehyb{ri+1:0>{len_nreact_chargeDehyb}}_mol.txt\n")
 		f.write("\n")
 
@@ -539,35 +551,41 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, ntemplate_hybBond, nreact
 
 		### reaction header
 		f.write(
-			"## Reactions\n")
-
-		### reaction command
-		f.write(
+			"## Reactions\n"
 			"fix             reactions all bond/react reset_mol_ids no")
 
-		### bond hybridization reactions (already 0 for forced binding)
-		for ri in range(ntemplate_hybBond):
-			f.write(
-		   f" &\n                react bondHyb{ri+1} all {int(react_every_bondHyb)} 0.0 {r12_cut_react_hybBond:.1f} hybBond{ri+1}_mol_bondNo hybBond{ri+1}_mol_bondYa react/hybBond{ri+1}_map.txt")
+		### bond hybridization reactions
+		if not p.forceBind: f.write(
+		   f" &\n                react bondHybMid all {int(react_every_bondHyb)} 0.0 {r12_cut_react_hybBond:.1f} hybBondMid_mol_bondNo hybBondMid_mol_bondYa react/hybBondMid_map.txt")
+		if not p.forceBind and not p.circularScaf: f.write(
+		   f" &\n                react bondHybEnd all {int(react_every_bondHyb)} 0.0 {r12_cut_react_hybBond:.1f} hybBondEnd_mol_bondNo hybBondEnd_mol_bondYa react/hybBondEnd_map.txt")
 		
-		### scaffold end bridging reaction
-		if bridgeEnds:
-			f.write(
-		   f" &\n                react bridgeEnds all {int(react_every_bondHyb)} 0.0 {p.r12_eq:.1f} bridge_mol_bondNo bridge_mol_bondYa react/bridge_map.txt")
+		### bridge making reaction
+		if bridgeEnds: f.write(
+		   f" &\n                react bridgeEnds all {int(react_every_bondHyb)} 0.0 {p.r12_eq:.2f} bridgeEnds_mol_bondNo bridgeEnds_mol_bondYa react/bridgeEnds_map.txt custom_charges 3")
 
-		### angle hybridization reactions (always necessary)
-		for ri in range(nreact_angleHyb):
-			f.write(
+		### bridge breaking reaction
+		if bridgeEnds and p.dehyb: f.write(
+		   f" &\n                react unbridgeEnds1 all {int(react_every_bondHyb)} {p.r12_cut_hyb:.1f} {comm_cutoff} unbridge1_mol_bondYa unbridge1_mol_bondNo react/unbridge1_map.txt custom_charges 4"
+		   f" &\n                react unbridgeEnds2 all {int(react_every_bondHyb)} {p.r12_cut_hyb:.1f} {comm_cutoff} unbridge2_mol_bondYa unbridge2_mol_bondNo react/unbridge1_map.txt custom_charges 4")
+
+		### angle hybridization reactions
+		for ri in range(nreact_angleHyb): f.write(
 		   f" &\n                react angleHyb{ri+1:0>{len_nreact_angleHyb}} all {int(react_every_angleHyb)} 0.0 {p.r12_cut_hyb:.1f} angleHyb{ri+1:0>{len_nreact_angleHyb}}_mol angleHyb{ri+1:0>{len_nreact_angleHyb}}_mol react/angleHyb{ri+1:0>{len_nreact_angleHyb}}_map.txt custom_charges 4")
 
-		### dehybridization reactions (already 0 for no dehybridization)
-		for ri in range(nreact_chargeDehyb):
-			f.write(
-	  	   f" &\n                react chargeDehyb{ri+1:0>{len_nreact_chargeDehyb}} all {int(react_every_angleDehyb)} {p.r12_cut_hyb:.1f} {int(np.sqrt(3)*p.dbox+1)} chargeDehyb{ri+1:0>{len_nreact_chargeDehyb}}_mol chargeDehyb{ri+1:0>{len_nreact_chargeDehyb}}_mol react/chargeDehyb{ri+1:0>{len_nreact_chargeDehyb}}_map.txt custom_charges 4")
-		for ri in range(ntemplate_hybBond):
-			f.write(
-		   f" &\n                react angleDehyb{ri+1} all {int(react_every_angleDehyb)} {p.r12_cut_hyb:.1f} {r12_cut_react_hybBond:.1f} hybBond{ri+1}_mol_bondYa hybBond{ri+1}_mol_bondYa react/hybBond{ri+1}_map.txt"
-		   f" &\n                react bondDehyb{ri+1} all {int(react_every_bondDehyb)} {r12_cut_react_hybBond:.1f} {int(np.sqrt(3)*p.dbox+1)} hybBond{ri+1}_mol_bondYa hybBond{ri+1}_mol_bondNo react/hybBond{ri+1}_map.txt")
+		### charge dehybridization reactions
+		for ri in range(nreact_chargeDehyb): f.write(
+	  	   f" &\n                react chargeDehyb{ri+1:0>{len_nreact_chargeDehyb}} all {int(react_every_angleDehyb)} {p.r12_cut_hyb:.1f} {comm_cutoff} chargeDehyb{ri+1:0>{len_nreact_chargeDehyb}}_mol chargeDehyb{ri+1:0>{len_nreact_chargeDehyb}}_mol react/chargeDehyb{ri+1:0>{len_nreact_chargeDehyb}}_map.txt custom_charges 4")
+
+		### bond dehybridization reactions
+		if not p.forceBind and p.dehyb: f.write(
+		   f" &\n                react bondDehybMid all {int(react_every_bondDehyb)} {r12_cut_react_hybBond:.1f} {comm_cutoff} hybBondMid_mol_bondYa hybBondMid_mol_bondNo react/hybBondMid_map.txt")
+		if not p.forceBind and p.dehyb and not p.circularScaf: f.write(
+		   f" &\n                react bondDehybEnd all {int(react_every_bondDehyb)} {r12_cut_react_hybBond:.1f} {comm_cutoff} hybBondEnd_mol_bondYa hybBondEnd_mol_bondNo react/hybBondEnd_map.txt")
+		if not p.forceBind and p.dehyb: f.write(
+		   f" &\n                react angleDehybMid all {int(react_every_angleDehyb)} {p.r12_cut_hyb:.1f} {r12_cut_react_hybBond:.1f} hybBondMid_mol_bondYa hybBondMid_mol_bondYa react/hybBondMid_map.txt")
+		if not p.forceBind and p.dehyb and not p.circularScaf: f.write(
+		   f" &\n                react angleDehybEnd all {int(react_every_angleDehyb)} {p.r12_cut_hyb:.1f} {r12_cut_react_hybBond:.1f} hybBondEnd_mol_bondYa hybBondEnd_mol_bondYa react/hybBondEnd_map.txt")
 		f.write("\n\n")
 
 		#-------- end reactions --------#
@@ -599,7 +617,7 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, ntemplate_hybBond, nreact
 			"compute         compD2b all property/local atype aatom1 aatom2 aatom3\n"
 		   f"dump            dumpD2 all local {int(p.dump_every)} dump_angles.dat index c_compD2a[1] c_compD2a[2] c_compD2b[1] c_compD2b[2] c_compD2b[3] c_compD2b[4]\n"
 			"dump_modify     dumpD2 append yes\n"
-		   f"dump            dumpD3 all custom {int(p.dump_every)} dump_charges.dat id q\n"
+		   f"dump            dumpD3 scaf custom {int(p.dump_every)} dump_charges.dat id q\n"
 			"dump_modify     dumpD3 sort id append yes\n\n")
 
 		### production
@@ -625,7 +643,7 @@ def writeReactHybBond(outReactFold, backbone_neighbors, complements, p):
 
 	### no reactions necessary for forced binding
 	if p.forceBind:
-		return 0
+		return
 
 	### initialize
 	atoms_all = []
@@ -653,6 +671,14 @@ def writeReactHybBond(outReactFold, backbone_neighbors, complements, p):
 	nreact = len(atoms_all)
 	for ri in range(nreact):
 
+		### reaction tag
+		if ri == 0: tag = "Mid"
+		if ri == 1: tag = "End"
+
+		### scaffold
+		if ri == 0: scaf = [0,2,3]
+		if ri == 1: scaf = [0,2]
+
 		atoms = atoms_all[ri]
 		bonds = bonds_all[ri]
 		edges = edges_all[ri]
@@ -660,8 +686,8 @@ def writeReactHybBond(outReactFold, backbone_neighbors, complements, p):
 		nbond = len(bonds)
 		nedge = len(edges)
 
-		molPreFile = f"{outReactFold}hybBond{ri+1}_mol_bondNo.txt"
-		with open(molPreFile, 'w') as f:
+		molFile = f"{outReactFold}hybBond{tag}_mol_bondNo.txt"
+		with open(molFile, 'w') as f:
 
 			f.write("## Hybridization\n")
 			f.write(f"{natom} atoms\n")
@@ -680,8 +706,8 @@ def writeReactHybBond(outReactFold, backbone_neighbors, complements, p):
 			for atomi in range(natom):
 				f.write(f"{atomi+1}\t{atomi+1}\n")
 
-		molPstFile = f"{outReactFold}hybBond{ri+1}_mol_bondYa.txt"
-		with open(molPstFile, 'w') as f:
+		molFile = f"{outReactFold}hybBond{tag}_mol_bondYa.txt"
+		with open(molFile, 'w') as f:
 
 			f.write("## Hybridization\n")
 			f.write(f"{natom} atoms\n")
@@ -701,7 +727,7 @@ def writeReactHybBond(outReactFold, backbone_neighbors, complements, p):
 			for atomi in range(natom):
 				f.write(f"{atomi+1}\t{atomi+1}\n")
 
-		mapFile = f"{outReactFold}hybBond{ri+1}_map.txt"
+		mapFile = f"{outReactFold}hybBond{tag}_map.txt"
 		with open(mapFile, 'w') as f:
 
 			f.write("## Hybridization\n")
@@ -719,16 +745,12 @@ def writeReactHybBond(outReactFold, backbone_neighbors, complements, p):
 
 			f.write("\nConstraints\n\n")
 			f.write(f"custom \"rxnsum(v_varMolID,1) == rxnsum(v_varMolID,2)\"\n")
-			f.write(f"custom \"rxnsum(v_varQ,1) == 1 || rxnsum(v_varQ,1) == 2\"\n")
-			for atomi in range(2,natom):
+			for atomi in scaf:
 				f.write(f"custom \"rxnsum(v_varQ,{atomi+1}) == 1 || rxnsum(v_varQ,{atomi+1}) == 2\"\n")
 
 			f.write("\nEquivalences\n\n")
 			for atomi in range(natom):
 				f.write(f"{atomi+1}\t{atomi+1}\n")
-
-	### return reaction count
-	return nreact
 
 
 ### write reaction files for hybridization angles
@@ -757,174 +779,146 @@ def writeReactAngleHyb(outReactFold, backbone_neighbors, complements, is_crossov
 		if complements[bi_5p] == -1 or complements[bi] == -1 or complements[bi_3p] == -1:
 			continue
 
-		#-------- working 5' to 3' --------#
+		### loop over configurational options (bridged ends, 5p staple copied, 3p staple copied)
+		for options in itertools.product([True, False], repeat=3):
 
-		### intialize
-		a = bi_5p
-		b = bi
-		c = bi_3p
-		aC = complements[a]
-		bC = complements[b]
-		cC = complements[c]
+			#-------- working 5' to 3' --------#
 
-		### core topology
-		atoms_5to3s = [ [ [0,int(is_crossover[a]),a], [0,int(is_crossover[b]),b], [0,int(is_crossover[c]),c], [1,-1,cC], [1,-1,bC], [1,-1,aC] ] ]
-		bonds_5to3s = [ [ [0,a,b], [0,b,c], [1,a,aC], [1,b,bC], [1,c,cC] ] ]
-		angls_5to3s = [ [ [int(is_crossover[b]),a,b,c,1] ] ]
-		edges_5to3s = [ [ cC, aC ] ]
+			### intialize
+			a = bi_5p
+			b = bi
+			c = bi_3p
+			aC = complements[a]
+			bC = complements[b]
+			cC = complements[c]
 
-		### add scaffold 5' side topology
-		a_5p = getAssembledNeighbors(a, backbone_neighbors, complements)[0]
-		if a_5p != -1:
-			ntemplate_original = len(atoms_5to3s)
-			if backbone_neighbors[a][0] == -1:
-				atoms_5to3s,bonds_5to3s,angls_5to3s,edges_5to3s = branchTemplate(atoms_5to3s,bonds_5to3s,angls_5to3s,edges_5to3s)
-			for ti in range(ntemplate_original):
-				atoms_5to3s[ti].append([0,-1,a_5p])
-				bonds_5to3s[ti].append([0,a_5p,a])
-				angls_5to3s[ti].append([int(is_crossover[a]),a_5p,a,b,0])
-				edges_5to3s[ti].append(a_5p)
+			### core topology
+			atoms_5to3 = [ [0,int(is_crossover[a]),a], [0,int(is_crossover[b]),b], [0,int(is_crossover[c]),c], [1,-1,cC], [1,-1,bC], [1,-1,aC] ]
+			bonds_5to3 = [ [0,a,b], [0,b,c], [1,a,aC], [1,b,bC], [1,c,cC] ]
+			angls_5to3 = [ [int(is_crossover[b]),a,b,c,1] ]
+			edges_5to3 = [ cC, aC ]
 
-		### add scaffold 3' side topology
-		c_3p = getAssembledNeighbors(c, backbone_neighbors, complements)[1]
-		if c_3p != -1:
-			ntemplate_original = len(atoms_5to3s)
-			if backbone_neighbors[c][1] == -1:
-				atoms_5to3s,bonds_5to3s,angls_5to3s,edges_5to3s = branchTemplate(atoms_5to3s,bonds_5to3s,angls_5to3s,edges_5to3s)
-			for ti in range(ntemplate_original):
-				atoms_5to3s[ti].append([0,-1,c_3p])
-				bonds_5to3s[ti].append([0,c,c_3p])
-				angls_5to3s[ti].append([int(is_crossover[c]),b,c,c_3p,2])
-				edges_5to3s[ti].append(c_3p)
+			### add scaffold 5' side topology
+			a_5p = getAssembledNeighbors(a, backbone_neighbors, complements)[0]
+			if a_5p != -1:
+				if backbone_neighbors[a][0] != -1 or options[0]:
+					atoms_5to3.append([0,-1,a_5p])
+					bonds_5to3.append([0,a_5p,a])
+					angls_5to3.append([int(is_crossover[a]),a_5p,a,b,0])
+					edges_5to3.append(a_5p)
 
-		### add central staple 5' side topology
-		bC_5p = backbone_neighbors[bC][0]
-		if bC_5p != -1:
-			ntemplate_original = len(atoms_5to3s)
-			if bC_5p == cC:
-				if p.stap_copies > 1:
-					atoms_5to3s,bonds_5to3s,angls_5to3s,edges_5to3s = branchTemplate(atoms_5to3s,bonds_5to3s,angls_5to3s,edges_5to3s)
-					for ti in range(ntemplate_original,len(atoms_5to3s)):
-						atoms_5to3s[ti].append([1,-1,bC_5p+p.n_stap])
-						edges_5to3s[ti].append(bC_5p+p.n_stap)
-						bonds_5to3s[ti].append([0,bC_5p+p.n_stap,bC])
-				for i in range(ntemplate_original):
-					bonds_5to3s[ti].append([0,cC,bC])
-			else:
-				for i in range(ntemplate_original):
-					if [1,-1,bC_5p] not in atoms_5to3s[ti]:
-						atoms_5to3s[ti].append([1,-1,bC_5p])
-						edges_5to3s[ti].append(bC_5p)
-					bonds_5to3s[ti].append([0,bC_5p,bC])
+			### add scaffold 3' side topology
+			c_3p = getAssembledNeighbors(c, backbone_neighbors, complements)[1]
+			if c_3p != -1:
+				if backbone_neighbors[c][1] != -1 or options[0]:
+					atoms_5to3.append([0,-1,c_3p])
+					bonds_5to3.append([0,c,c_3p])
+					angls_5to3.append([int(is_crossover[c]),b,c,c_3p,2])
+					edges_5to3.append(c_3p)
 
-		### add central staple 3' side topology
-		bC_3p = backbone_neighbors[bC][1]
-		if bC_3p != -1:
-			ntemplate_original = len(atoms_5to3s)
-			if bC_3p == aC:
-				if p.stap_copies > 1:
-					atoms_5to3s,bonds_5to3s,angls_5to3s,edges_5to3s = branchTemplate(atoms_5to3s,bonds_5to3s,angls_5to3s,edges_5to3s)
-					for ti in range(ntemplate_original,len(atoms_5to3s)):
-						atoms_5to3s[ti].append([1,-1,bC_3p+p.n_stap])
-						edges_5to3s[ti].append(bC_3p+p.n_stap)
-						bonds_5to3s[ti].append([0,bC,bC_3p+p.n_stap])
-				for i in range(ntemplate_original):
-					bonds_5to3s[ti].append([0,bC,aC])
-			else:
-				for i in range(ntemplate_original):
-					if [1,-1,bC_3p] not in atoms_5to3s[ti]:
-						atoms_5to3s[ti].append([1,-1,bC_3p])
-						edges_5to3s[ti].append(bC_3p)
-					bonds_5to3s[ti].append([0,bC,bC_3p])
+			### add central staple 5' side topology
+			bC_5p = backbone_neighbors[bC][0]
+			if bC_5p != -1:
+				if bC_5p == cC:
+					if p.stap_copies > 1 and options[1]:
+						atoms_5to3.append([1,-1,bC_5p+p.n_stap])
+						edges_5to3.append(bC_5p+p.n_stap)
+						bonds_5to3.append([0,bC_5p+p.n_stap,bC])
+					else:
+						bonds_5to3.append([0,cC,bC])
+				else:
+					if [1,-1,bC_5p] not in atoms_5to3:
+						atoms_5to3.append([1,-1,bC_5p])
+						edges_5to3.append(bC_5p)
+					bonds_5to3.append([0,bC_5p,bC])
 
-		#-------- working 3' to 5' --------#
+			### add central staple 3' side topology
+			bC_3p = backbone_neighbors[bC][1]
+			if bC_3p != -1:
+				if bC_3p == aC:
+					if p.stap_copies > 1 and options[2]:
+						atoms_5to3s.append([1,-1,bC_3p+p.n_stap])
+						edges_5to3s.append(bC_3p+p.n_stap)
+						bonds_5to3s.append([0,bC,bC_3p+p.n_stap])
+					else:
+						bonds_5to3.append([0,bC,aC])
+				else:
+					if [1,-1,bC_3p] not in atoms_5to3:
+						atoms_5to3.append([1,-1,bC_3p])
+						edges_5to3.append(bC_3p)
+					bonds_5to3.append([0,bC,bC_3p])
 
-		### intialize
-		a = bi_3p
-		b = bi
-		c = bi_5p
-		aC = complements[a]
-		bC = complements[b]
-		cC = complements[c]
+			#-------- working 3' to 5' --------#
 
-		### core topology
-		atoms_3to5s = [ [ [0,int(is_crossover[a]),a], [0,int(is_crossover[b]),b], [0,int(is_crossover[c]),c], [1,-1,cC], [1,-1,bC], [1,-1,aC] ] ]
-		bonds_3to5s = [ [ [0,a,b], [0,b,c], [1,a,aC], [1,b,bC], [1,c,cC] ] ]
-		angls_3to5s = [ [ [int(is_crossover[b]),a,b,c,1] ] ]
-		edges_3to5s = [ [ cC, aC ] ]
+			### intialize
+			a = bi_3p
+			b = bi
+			c = bi_5p
+			aC = complements[a]
+			bC = complements[b]
+			cC = complements[c]
 
-		### add scaffold 3' side topology
-		a_3p = getAssembledNeighbors(a, backbone_neighbors, complements)[1]
-		if a_3p != -1:
-			ntemplate_original = len(atoms_3to5s)
-			if backbone_neighbors[a][1] == -1:
-				atoms_3to5s,bonds_3to5s,angls_3to5s,edges_3to5s = branchTemplate(atoms_3to5s,bonds_3to5s,angls_3to5s,edges_3to5s)
-			for ti in range(ntemplate_original):
-				atoms_3to5s[ti].append([0,-1,a_3p])
-				bonds_3to5s[ti].append([0,a_3p,a])
-				angls_3to5s[ti].append([int(is_crossover[a]),a_3p,a,b,0])
-				edges_3to5s[ti].append(a_3p)
+			### core topology
+			atoms_3to5 = [ [0,int(is_crossover[a]),a], [0,int(is_crossover[b]),b], [0,int(is_crossover[c]),c], [1,-1,cC], [1,-1,bC], [1,-1,aC] ]
+			bonds_3to5 = [ [0,a,b], [0,b,c], [1,a,aC], [1,b,bC], [1,c,cC] ]
+			angls_3to5 = [ [int(is_crossover[b]),a,b,c,1] ]
+			edges_3to5 = [ cC, aC ]
 
-		### add scaffold 5' side topology
-		c_5p = getAssembledNeighbors(c, backbone_neighbors, complements)[0]
-		if c_5p != -1:
-			ntemplate_original = len(atoms_3to5s)
-			if backbone_neighbors[c][0] == -1:
-				atoms_3to5s,bonds_3to5s,angls_3to5s,edges_3to5s = branchTemplate(atoms_3to5s,bonds_3to5s,angls_3to5s,edges_3to5s)
-			for ti in range(ntemplate_original):
-				atoms_3to5s[ti].append([0,-1,c_5p])
-				bonds_3to5s[ti].append([0,c,c_5p])
-				angls_3to5s[ti].append([int(is_crossover[c]),b,c,c_5p,2])
-				edges_3to5s[ti].append(c_5p)
+			### add scaffold 3' side topology
+			a_3p = getAssembledNeighbors(a, backbone_neighbors, complements)[1]
+			if a_3p != -1:
+				if backbone_neighbors[a][1] != -1 or options[0]:
+					atoms_3to5.append([0,-1,a_3p])
+					bonds_3to5.append([0,a_3p,a])
+					angls_3to5.append([int(is_crossover[a]),a_3p,a,b,0])
+					edges_3to5.append(a_3p)
 
-		### add central staple 3' side topology
-		bC_3p = backbone_neighbors[bC][1]
-		if bC_3p != -1:
-			ntemplate_original = len(atoms_3to5s)
-			if bC_3p == cC:
-				if p.stap_copies > 1:
-					atoms_3to5s,bonds_3to5s,angls_3to5s,edges_3to5s = branchTemplate(atoms_3to5s,bonds_3to5s,angls_3to5s,edges_3to5s)
-					for ti in range(ntemplate_original,len(atoms_3to5s)):
-						atoms_3to5s[ti].append([1,-1,bC_3p+p.n_stap])
-						edges_3to5s[ti].append(bC_3p+p.n_stap)
-						bonds_3to5s[ti].append([0,bC_3p+p.n_stap,bC])
-				for i in range(ntemplate_original):
-					bonds_3to5s[ti].append([0,cC,bC])
-			else:
-				for i in range(ntemplate_original):
-					if [1,-1,bC_3p] not in atoms_3to5s[ti]:
-						atoms_3to5s[ti].append([1,-1,bC_3p])
-						edges_3to5s[ti].append(bC_3p)
-					bonds_3to5s[ti].append([0,bC_3p,bC])
+			### add scaffold 5' side topology
+			c_5p = getAssembledNeighbors(c, backbone_neighbors, complements)[0]
+			if c_5p != -1:
+				if backbone_neighbors[c][0] != -1 or options[0]:
+					atoms_3to5.append([0,-1,c_5p])
+					bonds_3to5.append([0,c,c_5p])
+					angls_3to5.append([int(is_crossover[c]),b,c,c_5p,2])
+					edges_3to5.append(c_5p)
 
-		### add central staple 5' side topology
-		bC_5p = backbone_neighbors[bC][0]
-		if bC_5p != -1:
-			ntemplate_original = len(atoms_3to5s)
-			if bC_5p == aC:
-				if p.stap_copies > 1:
-					atoms_3to5s,bonds_3to5s,angls_3to5s,edges_3to5s = branchTemplate(atoms_3to5s,bonds_3to5s,angls_3to5s,edges_3to5s)
-					for ti in range(ntemplate_original,len(atoms_3to5s)):
-						atoms_3to5s[ti].append([1,-1,bC_5p+p.n_stap])
-						edges_3to5s[ti].append(bC_5p+p.n_stap)
-						bonds_3to5s[ti].append([0,bC,bC_5p+p.n_stap])
-				for i in range(ntemplate_original):
-					bonds_3to5s[ti].append([0,bC,aC])
-			else:
-				for i in range(ntemplate_original):
-					if [1,-1,bC_5p] not in atoms_3to5s[ti]:
-						atoms_3to5s[ti].append([1,-1,bC_5p])
-						edges_3to5s[ti].append(bC_5p)
-					bonds_3to5s[ti].append([0,bC,bC_5p])
+			### add central staple 3' side topology
+			bC_3p = backbone_neighbors[bC][1]
+			if bC_3p != -1:
+				if bC_3p == cC:
+					if p.stap_copies > 1 and options[2]:
+						atoms_3to5.append([1,-1,bC_3p+p.n_stap])
+						edges_3to5.append(bC_3p+p.n_stap)
+						bonds_3to5.append([0,bC_3p+p.n_stap,bC])
+					else:
+						bonds_3to5.append([0,cC,bC])
+				else:
+					if [1,-1,bC_3p] not in atoms_3to5:
+						atoms_3to5.append([1,-1,bC_3p])
+						edges_3to5.append(bC_3p)
+					bonds_3to5.append([0,bC_3p,bC])
 
-		#-------- add templates to list, if not duplicates --------#
+			### add central staple 5' side topology
+			bC_5p = backbone_neighbors[bC][0]
+			if bC_5p != -1:
+				if bC_5p == aC:
+					if p.stap_copies > 1 and options[1]:
+						atoms_3to5.append([1,-1,bC_5p+p.n_stap])
+						edges_3to5.append(bC_5p+p.n_stap)
+						bonds_3to5.append([0,bC,bC_5p+p.n_stap])
+					else:
+						bonds_3to5.append([0,bC,aC])
+				else:
+					if [1,-1,bC_5p] not in atoms_3to5:
+						atoms_3to5.append([1,-1,bC_5p])
+						edges_3to5.append(bC_5p)
+					bonds_3to5.append([0,bC,bC_5p])
 
-		ntemplate = len(atoms_5to3s)
-		for ti in range(ntemplate):
+			#-------- add template to list, if not duplicate --------#
 
 			### renumber
-			atoms_5to3,bonds_5to3,angls_5to3,edges_5to3 = renumberAtoms_angleTemplate(atoms_5to3s[ti],bonds_5to3s[ti],angls_5to3s[ti],edges_5to3s[ti])
-			atoms_3to5,bonds_3to5,angls_3to5,edges_3to5 = renumberAtoms_angleTemplate(atoms_3to5s[ti],bonds_3to5s[ti],angls_3to5s[ti],edges_3to5s[ti])
+			atoms_5to3,bonds_5to3,angls_5to3,edges_5to3 = renumberAtoms_angleTemplate(atoms_5to3,bonds_5to3,angls_5to3,edges_5to3)
+			atoms_3to5,bonds_3to5,angls_3to5,edges_3to5 = renumberAtoms_angleTemplate(atoms_3to5,bonds_3to5,angls_3to5,edges_3to5)
 
 			### test for symmetry
 			templates = [[a,b,c,d] for a,b,c,d in zip([atoms_5to3,atoms_3to5],[bonds_5to3,bonds_3to5],[angls_5to3,angls_3to5],[edges_5to3,edges_3to5])]
@@ -1142,57 +1136,66 @@ def writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_cros
 			print("Flag: Scaffold ends are bridged, but dehybridization is is off, so end bridging is permenant.")
 
 		### no reactions
-		return 0, False
+		return 0, bridgeEnds
 
 	### initialize templates
 	atoms_all = []
 	bonds_all = []
 	edges_all = []
+	extra_all = []
+
+	### extra array description
+	# [ initiator scaffold, initiator staple, whether off state is allowed (for each angle), whether on state is allowed (for each angle) ]
 
 	### core topology - three staples, two staple backbone bonds
 	atoms = [ [0,0,0], [0,0,1], [0,0,2], [1,-1,3], [1,-1,4], [1,-1,5], [0,-1,6], [0,-1,7] ]
 	bonds = [ [0,0,1], [0,1,2], [1,0,5], [1,1,4], [1,2,3], [0,6,0], [0,2,7], [0,3,4], [0,4,5] ]
 	edges = [ 3, 4, 5, 6, 7 ]
+	extra = [ 1, 4, [True,False,True], [True,True,True] ]
 
 	### all 180
 	if checkTemplateMatch(True, True, True, True, True, True, backbone_neighbors, complements, is_crossover, p):
-		if p.debug: print("Used angle dehybridization template 1")
+		if p.debug: print("Used charge dehybridization template 1")
 		atoms_all.append(copy.deepcopy(atoms))
 		bonds_all.append(copy.deepcopy(bonds))
 		edges_all.append(copy.deepcopy(edges))
+		extra_all.append(copy.deepcopy(extra))
 
 	### side 90
 	if checkTemplateMatch(True, True, True, False, True, True, backbone_neighbors, complements, is_crossover, p):
-		if p.debug: print("Used angle dehybridization template 2")
+		if p.debug: print("Used charge dehybridization template 2")
 		atoms_copy = copy.deepcopy(atoms)
 		atoms_copy[0][1] = 1
 		atoms_all.append(atoms_copy)
 		bonds_all.append(copy.deepcopy(bonds))
 		edges_all.append(copy.deepcopy(edges))
+		extra_all.append(copy.deepcopy(extra))
 
 	### side, middle 90
 	if checkTemplateMatch(True, True, True, False, False, True, backbone_neighbors, complements, is_crossover, p):
-		if p.debug: print("Used angle dehybridization template 3")
+		if p.debug: print("Used charge dehybridization template 3")
 		atoms_copy = copy.deepcopy(atoms)
 		atoms_copy[0][1] = 1
 		atoms_copy[1][1] = 1
 		atoms_all.append(atoms_copy)
 		bonds_all.append(copy.deepcopy(bonds))
 		edges_all.append(copy.deepcopy(edges))
+		extra_all.append(copy.deepcopy(extra))
 
 	### side, side 90
 	if checkTemplateMatch(True, True, True, False, True, False, backbone_neighbors, complements, is_crossover, p):
-		if p.debug: print("Used angle dehybridization template 4")
+		if p.debug: print("Used charge dehybridization template 4")
 		atoms_copy = copy.deepcopy(atoms)
 		atoms_copy[0][1] = 1
 		atoms_copy[2][1] = 1
 		atoms_all.append(atoms_copy)
 		bonds_all.append(copy.deepcopy(bonds))
 		edges_all.append(copy.deepcopy(edges))
+		extra_all.append(copy.deepcopy(extra))
 
 	### all 90
 	if checkTemplateMatch(True, True, True, False, False, False, backbone_neighbors, complements, is_crossover, p):
-		if p.debug: print("Used angle dehybridization template 5")
+		if p.debug: print("Used charge dehybridization template 5")
 		atoms_copy = copy.deepcopy(atoms)
 		atoms_copy[0][1] = 1
 		atoms_copy[1][1] = 1
@@ -1200,70 +1203,78 @@ def writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_cros
 		atoms_all.append(atoms_copy)
 		bonds_all.append(copy.deepcopy(bonds))
 		edges_all.append(copy.deepcopy(edges))
+		extra_all.append(copy.deepcopy(extra))
 
 	### core topology - three staples, one staple backbone bond
 	atoms = [ [0,0,0], [0,0,1], [0,0,2], [1,-1,3], [1,-1,4], [1,-1,5], [0,-1,6], [0,-1,7] ]
 	bonds = [ [0,0,1], [0,1,2], [1,0,5], [1,1,4], [1,2,3], [0,6,0], [0,2,7], [0,3,4] ]
 	edges = [ 3, 4, 5, 6, 7 ]
+	extra = [ 1, 4, [True,False,True], [True,True,True] ]
 
 	### all 180
 	if checkTemplateMatch(True, True, False, True, True, True, backbone_neighbors, complements, is_crossover, p):
-		if p.debug: print("Used angle dehybridization template 6")
+		if p.debug: print("Used charge dehybridization template 6")
 		atoms_all.append(copy.deepcopy(atoms))
 		bonds_all.append(copy.deepcopy(bonds))
 		edges_all.append(copy.deepcopy(edges))
+		extra_all.append(copy.deepcopy(extra))
 
 	### left 90
 	if checkTemplateMatch(True, True, False, False, True, True, backbone_neighbors, complements, is_crossover, p):
-		if p.debug: print("Used angle dehybridization template 7")
+		if p.debug: print("Used charge dehybridization template 7")
 		atoms_copy = copy.deepcopy(atoms)
 		atoms_copy[0][1] = 1
 		atoms_all.append(atoms_copy)
 		bonds_all.append(copy.deepcopy(bonds))
 		edges_all.append(copy.deepcopy(edges))
+		extra_all.append(copy.deepcopy(extra))
 
 	### right 90
 	if checkTemplateMatch(True, True, False, True, True, False, backbone_neighbors, complements, is_crossover, p):
-		if p.debug: print("Used angle dehybridization template 8")
+		if p.debug: print("Used charge dehybridization template 8")
 		atoms_copy = copy.deepcopy(atoms)
 		atoms_copy[2][1] = 1
 		atoms_all.append(atoms_copy)
 		bonds_all.append(copy.deepcopy(bonds))
 		edges_all.append(copy.deepcopy(edges))
+		extra_all.append(copy.deepcopy(extra))
 
 	### left, middle 90
 	if checkTemplateMatch(True, True, False, False, False, True, backbone_neighbors, complements, is_crossover, p):
-		if p.debug: print("Used angle dehybridization template 9")
+		if p.debug: print("Used charge dehybridization template 9")
 		atoms_copy = copy.deepcopy(atoms)
 		atoms_copy[0][1] = 1
 		atoms_copy[1][1] = 1
 		atoms_all.append(atoms_copy)
 		bonds_all.append(copy.deepcopy(bonds))
 		edges_all.append(copy.deepcopy(edges))
+		extra_all.append(copy.deepcopy(extra))
 
 	### middle, right 90
 	if checkTemplateMatch(True, True, False, True, False, False, backbone_neighbors, complements, is_crossover, p):
-		if p.debug: print("Used angle dehybridization template 10")
+		if p.debug: print("Used charge dehybridization template 10")
 		atoms_copy = copy.deepcopy(atoms)
 		atoms_copy[1][1] = 1
 		atoms_copy[2][1] = 1
 		atoms_all.append(atoms_copy)
 		bonds_all.append(copy.deepcopy(bonds))
 		edges_all.append(copy.deepcopy(edges))
+		extra_all.append(copy.deepcopy(extra))
 
 	### left, right 90
 	if checkTemplateMatch(True, True, False, False, True, False, backbone_neighbors, complements, is_crossover, p):
-		if p.debug: print("Used angle dehybridization template 11")
+		if p.debug: print("Used charge dehybridization template 11")
 		atoms_copy = copy.deepcopy(atoms)
 		atoms_copy[0][1] = 1
 		atoms_copy[2][1] = 1
 		atoms_all.append(atoms_copy)
 		bonds_all.append(copy.deepcopy(bonds))
 		edges_all.append(copy.deepcopy(edges))
+		extra_all.append(copy.deepcopy(extra))
 
 	### all 90
 	if checkTemplateMatch(True, True, False, False, False, False, backbone_neighbors, complements, is_crossover, p):
-		if p.debug: print("Used angle dehybridization template 12")
+		if p.debug: print("Used charge dehybridization template 12")
 		atoms_copy = copy.deepcopy(atoms)
 		atoms_copy[0][1] = 1
 		atoms_copy[1][1] = 1
@@ -1271,51 +1282,57 @@ def writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_cros
 		atoms_all.append(atoms_copy)
 		bonds_all.append(copy.deepcopy(bonds))
 		edges_all.append(copy.deepcopy(edges))
+		extra_all.append(copy.deepcopy(extra))
 
 	### core topology - three staples, no staple backbone bonds
 	atoms = [ [0,0,0], [0,0,1], [0,0,2], [1,-1,3], [1,-1,4], [1,-1,5], [0,-1,6], [0,-1,7] ]
 	bonds = [ [0,0,1], [0,1,2], [1,0,5], [1,1,4], [1,2,3], [0,6,0], [0,2,7] ]
 	edges = [ 3, 4, 5, 6, 7 ]
+	extra = [ 1, 4, [True,False,True], [True,True,True] ]
 
 	### all 180
 	if checkTemplateMatch(True, False, False, True, True, True, backbone_neighbors, complements, is_crossover, p):
-		if p.debug: print("Used angle dehybridization template 13")
+		if p.debug: print("Used charge dehybridization template 13")
 		atoms_all.append(copy.deepcopy(atoms))
 		bonds_all.append(copy.deepcopy(bonds))
 		edges_all.append(copy.deepcopy(edges))
+		extra_all.append(copy.deepcopy(extra))
 
 	### side 90
 	if checkTemplateMatch(True, False, False, False, True, True, backbone_neighbors, complements, is_crossover, p):
-		if p.debug: print("Used angle dehybridization template 14")
+		if p.debug: print("Used charge dehybridization template 14")
 		atoms_copy = copy.deepcopy(atoms)
 		atoms_copy[0][1] = 1
 		atoms_all.append(atoms_copy)
 		bonds_all.append(copy.deepcopy(bonds))
 		edges_all.append(copy.deepcopy(edges))
+		extra_all.append(copy.deepcopy(extra))
 
 	### side, middle 90
 	if checkTemplateMatch(True, False, False, False, False, True, backbone_neighbors, complements, is_crossover, p):
-		if p.debug: print("Used angle dehybridization template 15")
+		if p.debug: print("Used charge dehybridization template 15")
 		atoms_copy = copy.deepcopy(atoms)
 		atoms_copy[0][1] = 1
 		atoms_copy[1][1] = 1
 		atoms_all.append(atoms_copy)
 		bonds_all.append(copy.deepcopy(bonds))
 		edges_all.append(copy.deepcopy(edges))
+		extra_all.append(copy.deepcopy(extra))
 
 	### side, side 90
 	if checkTemplateMatch(True, False, False, False, True, False, backbone_neighbors, complements, is_crossover, p):
-		if p.debug: print("Used angle dehybridization template 16")
+		if p.debug: print("Used charge dehybridization template 16")
 		atoms_copy = copy.deepcopy(atoms)
 		atoms_copy[0][1] = 1
 		atoms_copy[2][1] = 1
 		atoms_all.append(atoms_copy)
 		bonds_all.append(copy.deepcopy(bonds))
 		edges_all.append(copy.deepcopy(edges))
+		extra_all.append(copy.deepcopy(extra))
 
 	### all 90
 	if checkTemplateMatch(True, False, False, False, False, False, backbone_neighbors, complements, is_crossover, p):
-		if p.debug: print("Used angle dehybridization template 17")
+		if p.debug: print("Used charge dehybridization template 17")
 		atoms_copy = copy.deepcopy(atoms)
 		atoms_copy[0][1] = 1
 		atoms_copy[1][1] = 1
@@ -1323,53 +1340,58 @@ def writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_cros
 		atoms_all.append(atoms_copy)
 		bonds_all.append(copy.deepcopy(bonds))
 		edges_all.append(copy.deepcopy(edges))
+		extra_all.append(copy.deepcopy(extra))
 
 	### core topology - two staples, one staple backbone bond
 	atoms = [ [0,0,0], [0,0,1], [0,0,2], [1,-1,3], [1,-1,4], [0,-1,5], [0,-1,6] ]
 	bonds = [ [0,0,1], [0,1,2], [1,1,4], [1,2,3], [0,5,0], [0,2,6], [0,3,4] ]
 	edges = [ 3, 4, 5, 6 ]
+	extra = [ 1, 4, [True,True,False], [False,False,True] ]
 
 	### left 180
 	if checkTemplateMatch(False, False, True, True, True, True, backbone_neighbors, complements, is_crossover, p):
-		if p.debug: print("Used angle dehybridization template 18")
+		if p.debug: print("Used charge dehybridization template 18")
 		atoms_all.append(copy.deepcopy(atoms))
 		bonds_all.append(copy.deepcopy(bonds))
 		edges_all.append(copy.deepcopy(edges))
+		extra_all.append(copy.deepcopy(extra))
 
 	### left 90
 	if checkTemplateMatch(False, False, True, False, True, True, backbone_neighbors, complements, is_crossover, p):
-		if p.debug: print("Used angle dehybridization template 19")
+		if p.debug: print("Used charge dehybridization template 19")
 		atoms_copy = copy.deepcopy(atoms)
 		atoms_copy[0][1] = 1
 		atoms_all.append(atoms_copy)
 		bonds_all.append(copy.deepcopy(bonds))
 		edges_all.append(copy.deepcopy(edges))
+		extra_all.append(copy.deepcopy(extra))
 
 	### core topology - two staples, no staple backbone bonds
 	atoms = [ [0,0,0], [0,0,1], [0,0,2], [1,-1,3], [1,-1,4], [0,-1,5], [0,-1,6] ]
 	bonds = [ [0,0,1], [0,1,2], [1,0,4], [1,1,3], [0,5,0], [0,2,6] ]
 	edges = [ 3, 4, 5, 6 ]
+	extra = [ 1, 4, [True,True,False], [False,False,True] ]
 
 	### left 180
 	if checkTemplateMatch(False, False, False, True, True, True, backbone_neighbors, complements, is_crossover, p):
-		if p.debug: print("Used angle dehybridization template 20")
+		if p.debug: print("Used charge dehybridization template 20")
 		atoms_all.append(copy.deepcopy(atoms))
 		bonds_all.append(copy.deepcopy(bonds))
 		edges_all.append(copy.deepcopy(edges))
+		extra_all.append(copy.deepcopy(extra))
 
 	### left 90
 	if checkTemplateMatch(False, False, False, False, True, True, backbone_neighbors, complements, is_crossover, p):
-		if p.debug: print("Used angle dehybridization template 21")
+		if p.debug: print("Used charge dehybridization template 21")
 		atoms_copy = copy.deepcopy(atoms)
 		atoms_copy[0][1] = 1
 		atoms_all.append(atoms_copy)
 		bonds_all.append(copy.deepcopy(bonds))
 		edges_all.append(copy.deepcopy(edges))
+		extra_all.append(copy.deepcopy(extra))
 
-	### extra information (initiator scaffold, initiator staple, initiator scaffold initial charge, whether linear template)
-	extra_all = []
-	for ri in range(len(atoms_all)):
-		extra_all.append( [ 1, 4, atoms_all[ri][1][1]+2, False ] )
+	### count circular scaffold reactions
+	nreact_circular = len(atoms_all)
 
 	### for nice debug output
 	if p.debug: print()
@@ -1377,7 +1399,7 @@ def writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_cros
 	### linear scaffold additions
 	if not p.circularScaf:
 
-		#-------- 5' scaffold end --------#
+		#-------- 5' end, working 5' to 3' --------#
 
 		### core beads
 		a = 0
@@ -1395,8 +1417,9 @@ def writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_cros
 			atoms = [ [0,int(is_crossover[a]),a], [0,int(is_crossover[b]),b], [0,int(is_crossover[c]),c], [1,-1,cC], [1,-1,bC], [1,-1,aC], [0,-1,c_3p] ]
 			bonds = [ [0,a,b], [0,b,c], [1,a,aC], [1,b,bC], [1,c,cC], [0,c,c_3p] ]
 			edges = [ cC, bC, aC, c_3p ]
-			extra = [ b, bC, int(is_crossover[b])+2, True ]
+			extra = [ b, bC, [True,False,True], [False,True,True] ]
 
+			### this does not account for multiple staple copies
 			if backbone_neighbors[bC][0] == cC:
 				bonds.append([0,cC,bC])
 			if backbone_neighbors[bC][1] == aC:
@@ -1409,12 +1432,15 @@ def writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_cros
 			extra_all.append(copy.deepcopy(extra))
 
 			### dehybridization of end bead
-			atoms = [ [0,int(is_crossover[a]),a], [0,int(is_crossover[b]),b], [0,int(is_crossover[c]),c], [1,-1,bC], [1,-1,aC] ]
-			bonds = [ [0,a,b], [0,b,c], [1,a,aC], [1,b,bC] ]
-			edges = [ c, bC, aC ]
-			extra = [ a, aC, int(is_crossover[a]), True ]
+			atoms = [ [0,int(is_crossover[a]),a], [0,int(is_crossover[b]),b], [0,int(is_crossover[c]),c], [1,-1,cC], [1,-1,bC], [1,-1,aC], [0,-1,c_3p] ]
+			bonds = [ [0,a,b], [0,b,c], [1,a,aC], [1,b,bC], [1,c,cC], [0,c,c_3p] ]
+			edges = [ cC, bC, aC, c_3p ]
+			extra = [ a, aC, [True,False,False], [False,True,False] ]
 
-			if backbone_neighbors[aC][0] == bC:
+			### this does not account for multiple staple copies
+			if backbone_neighbors[bC][0] == cC:
+				bonds.append([0,cC,bC])
+			if backbone_neighbors[bC][1] == aC:
 				bonds.append([0,bC,aC])
 
 			atoms,bonds,edges,extra = renumberAtoms_chargeTemplate(atoms,bonds,edges,extra)
@@ -1430,8 +1456,9 @@ def writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_cros
 			atoms = [ [0,int(is_crossover[a]),a], [0,int(is_crossover[b]),b], [0,int(is_crossover[c]),c], [1,-1,cC], [1,-1,bC], [0,-1,c_3p] ]
 			bonds = [ [0,a,b], [0,b,c], [1,b,bC], [1,c,cC], [0,c,c_3p] ]
 			edges = [ cC, bC, c_3p ]
-			extra = [ b, bC, int(is_crossover[b]), True ]
+			extra = [ b, bC, [True,True,False], [False,False,True] ]
 
+			### this does not account for multiple staple copies
 			if backbone_neighbors[bC][0] == cC:
 				bonds.append([0,cC,bC])
 
@@ -1459,8 +1486,9 @@ def writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_cros
 			atoms = [ [0,int(is_crossover[a]),a], [0,int(is_crossover[b]),b], [0,int(is_crossover[c]),c], [1,-1,cC], [1,-1,bC], [1,-1,aC], [0,-1,c_5p] ]
 			bonds = [ [0,a,b], [0,b,c], [1,a,aC], [1,b,bC], [1,c,cC], [0,c,c_5p] ]
 			edges = [ cC, bC, aC, c_5p ]
-			extra = [ b, bC, int(is_crossover[b])+2, True ]
+			extra = [ b, bC, [True,False,True], [False,True,True] ]
 
+			### this does not account for multiple staple copies
 			if backbone_neighbors[bC][0] == cC:
 				bonds.append([0,cC,bC])
 			if backbone_neighbors[bC][1] == aC:
@@ -1473,12 +1501,14 @@ def writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_cros
 			extra_all.append(copy.deepcopy(extra))
 
 			### dehybridization of end bead
-			atoms = [ [0,int(is_crossover[a]),a], [0,int(is_crossover[b]),b], [0,int(is_crossover[c]),c], [1,-1,bC], [1,-1,aC] ]
-			bonds = [ [0,a,b], [0,b,c], [1,a,aC], [1,b,bC] ]
-			edges = [ c, bC, aC ]
-			extra = [ a, aC, int(is_crossover[a]), True ]
+			atoms = [ [0,int(is_crossover[a]),a], [0,int(is_crossover[b]),b], [0,int(is_crossover[c]),c], [1,-1,cC], [1,-1,bC], [1,-1,aC], [0,-1,c_5p] ]
+			bonds = [ [0,a,b], [0,b,c], [1,a,aC], [1,b,bC], [1,c,cC], [0,c,c_5p] ]
+			edges = [ cC, bC, aC, c_5p ]
+			extra = [ a, aC, [True,False,False], [False,True,False] ]
 
-			if backbone_neighbors[aC][0] == bC:
+			if backbone_neighbors[bC][0] == cC:
+				bonds.append([0,cC,bC])
+			if backbone_neighbors[bC][1] == aC:
 				bonds.append([0,bC,aC])
 
 			atoms,bonds,edges,extra = renumberAtoms_chargeTemplate(atoms,bonds,edges,extra)
@@ -1494,8 +1524,9 @@ def writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_cros
 			atoms = [ [0,int(is_crossover[a]),a], [0,int(is_crossover[b]),b], [0,int(is_crossover[c]),c], [1,-1,cC], [1,-1,bC], [0,-1,c_5p] ]
 			bonds = [ [0,a,b], [0,b,c], [1,b,bC], [1,c,cC], [0,c,c_5p] ]
 			edges = [ cC, bC, c_5p ]
-			extra = [ b, bC, int(is_crossover[b]), True ]
+			extra = [ b, bC, [True,True,False], [False,False,True] ]
 
+			### this does not account for multiple staple copies
 			if backbone_neighbors[bC][0] == cC:
 				bonds.append([0,cC,bC])
 
@@ -1527,14 +1558,12 @@ def writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_cros
 		nbond = len(bonds)
 		nedge = len(edges)
 
-		atoms_charged_noninit = []
-		for atomi in range(3):
-			if atomi != extra[0]:
-				atoms_charged_noninit.append(atomi)
-
-		nconstraint = 3
-		if bridgeEnds and not extra[3]:
-			nconstraint = 5
+		nconstraint = 0
+		for i in range(3):
+			if extra[2][i] or extra[3][i]:
+				nconstraint += 1
+		if bridgeEnds and ri < nreact_circular:
+			nconstraint += 2
 
 		molFile = f"{outReactFold}chargeDehyb{ri+1:0>{len_nreact}}_mol.txt"
 		with open(molFile, 'w') as f:
@@ -1582,13 +1611,44 @@ def writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_cros
 			for edgei in range(nedge):
 				f.write(f"{edges[edgei]+1}\n")
 
+			### constraints
 			f.write("\nConstraints\n\n")
-			f.write(f"custom \"round(rxnsum(v_varQ,{extra[0]+1})) == {extra[2]+1}\"\n")
-			f.write(f"custom \"round(rxnsum(v_varQ,{atoms_charged_noninit[0]+1})) == {atoms[atoms_charged_noninit[0]][1]+1} || "
-							 f"round(rxnsum(v_varQ,{atoms_charged_noninit[0]+1})) == {atoms[atoms_charged_noninit[0]][1]+3}\"\n")
-			f.write(f"custom \"round(rxnsum(v_varQ,{atoms_charged_noninit[1]+1})) == {atoms[atoms_charged_noninit[1]][1]+1} || "
-							 f"round(rxnsum(v_varQ,{atoms_charged_noninit[1]+1})) == {atoms[atoms_charged_noninit[1]][1]+3}\"\n")
-			if nconstraint == 5:
+
+			### constraint on atom 1
+			if extra[2][0] or extra[3][0]:
+				f.write(f"custom ")
+				if extra[2][0]:
+					f.write(f"\"round(rxnsum(v_varQ,1)) == {atoms[0][1]+1}\"")
+					if extra[3][0]:
+						f.write(" || ")
+				if extra[3][0]:
+					f.write(f"\"round(rxnsum(v_varQ,1)) == {atoms[0][1]+3}\"")
+				f.write(f"\n")
+
+			### constraint on atom 2
+			if extra[2][1] or extra[3][1]:
+				f.write(f"custom ")
+				if extra[2][1]:
+					f.write(f"\"round(rxnsum(v_varQ,2)) == {atoms[1][1]+1}\"")
+					if extra[3][1]:
+						f.write(" || ")
+				if extra[3][1]:
+					f.write(f"\"round(rxnsum(v_varQ,2)) == {atoms[1][1]+3}\"")
+				f.write(f"\n")
+
+			### constraint on atom 3
+			if extra[2][2] or extra[3][2]:
+				f.write(f"custom ")
+				if extra[2][2]:
+					f.write(f"\"round(rxnsum(v_varQ,3)) == {atoms[2][1]+1}\"")
+					if extra[3][2]:
+						f.write(" || ")
+				if extra[3][2]:
+					f.write(f"\"round(rxnsum(v_varQ,3)) == {atoms[2][1]+3}\"")
+				f.write(f"\n")
+
+			### avoid ends when appropriate
+			if bridgeEnds and ri < nreact_circular:
 				f.write(f"custom \"round(rxnsum(v_varMolID,{extra[0]+1})) != {p.n_scaf}\"\n")
 				f.write(f"custom \"round(rxnsum(v_varMolID,{extra[0]+1})) != 1\"\n")
 		
@@ -1596,12 +1656,16 @@ def writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_cros
 			for atomi in range(natom):
 				f.write(f"{atomi+1}\t{atomi+1}\n")
 
-	#-------- templates for end bridging --------#
-
 	### if bridging ends
 	if bridgeEnds:
 
-		#-------- center 5' end, working 3' to 5'  --------#
+		### initialize templates
+		atoms_all = []
+		bonds_all = []
+		edges_all = []
+		extra_all = []
+
+		#-------- center as 5' end, working 3' to 5'  --------#
 
 		### core beads
 		a = 1
@@ -1616,19 +1680,51 @@ def writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_cros
 		### core topology
 		atoms = [ [0,int(is_crossover[a]),a], [0,int(is_crossover[b]),b], [0,int(is_crossover[c]),c], [1,-1,cC], [1,-1,bC], [0,-1,a_3p], [0,-1,c_5p] ]
 		bonds = [ [0,a,b], [0,b,c], [1,b,bC], [1,c,cC], [0,cC,bC], [0,a_3p,a], [0,c,c_5p] ]
-		edges = [ bC, cC, a_3p, c_5p ]
+		edges = [ cC, a_3p, c_5p ]
+		extra = [ b, bC, [True, True, True], [True, True, True] ]
 
-		### side scaffold compliment
+		### scaffold 3' side compliment
 		if aC != 0:
 			atoms.append([1,-1,aC])
 			bonds.append([1,a,aC])
 			edges.append(aC)
 
-		### side staple bond
-		if backbone_neighbors[bC][0] == aC:
-			bonds.append([0,bC,aC])
+		### central staple 5' side bond
+		bC_5p = backbone_neighbors[bC][0]
+		if bC_5p == -1:
+			atoms,bonds,edges,extra = renumberAtoms_chargeTemplate(atoms,bonds,edges,extra)
+			atoms_all.append(copy.deepcopy(atoms))
+			bonds_all.append(copy.deepcopy(bonds))
+			edges_all.append(copy.deepcopy(edges))
+			extra_all.append(copy.deepcopy(extra))
 
-		#-------- center 3' end, working 5' to 3' --------#
+		else:
+			if bC_5p == aC:
+				bonds_copy = copy.deepcopy(bonds)
+				bonds_copy.append([0,bC,aC])
+
+				atoms_copy,bonds_copy,edges_copy,extra = renumberAtoms_chargeTemplate(atoms_copy,bonds_copy,edges_copy,extra)
+				atoms_all.append(copy.deepcopy(atoms))
+				bonds_all.append(bonds_copy)
+				edges_all.append(copy.deepcopy(edges))
+				extra_all.append(copy.deepcopy(extra))
+
+			if bC_5p != aC or p.stap_copies > 1:
+				atoms_copy = copy.deepcopy(atoms)
+				bonds_copy = copy.deepcopy(bonds)
+				edges_copy = copy.deepcopy(edges)
+				atoms_copy.append([1,-1,bC_5p])
+				bonds_copy.append([0,bC,bC_5p])
+				edges_copy.append(bC_5p)
+
+				atoms_copy,bonds_copy,edges_copy,extra = renumberAtoms_chargeTemplate(atoms_copy,bonds_copy,edges_copy,extra)
+				atoms_all.append(atoms_copy)
+				bonds_all.append(bonds_copy)
+				edges_all.append(edges_copy)
+				extra_all.append(copy.deepcopy(extra))
+
+
+		#-------- center as 3' end, working 5' to 3' --------#
 
 		### core beads
 		a = p.n_scaf-2
@@ -1644,23 +1740,65 @@ def writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_cros
 		atoms = [ [0,int(is_crossover[a]),a], [0,int(is_crossover[b]),b], [0,int(is_crossover[c]),c], [1,-1,cC], [1,-1,bC], [0,-1,a_5p], [0,-1,c_3p] ]
 		bonds = [ [0,a,b], [0,b,c], [1,b,bC], [1,c,cC], [0,cC,bC], [0,a_5p,a], [0,c,c_3p] ]
 		edges = [ bC, cC, a_5p, c_3p ]
+		extra = [ b, bC, [True, True, True], [True, True, True] ]
 
-		### side scaffold compliment
+		### scaffold 5' side compliment
 		if aC != 0:
 			atoms.append([1,-1,aC])
 			bonds.append([1,a,aC])
 			edges.append(aC)
 
-		### side staple bond
-		if backbone_neighbors[bC][1] == aC:
-			bonds.append([0,bC,aC])
+		### central staple 3' side bond
+		bC_3p = backbone_neighbors[bC][0]
+		if bC_3p == -1:
+			atoms,bonds,edges,extra = renumberAtoms_chargeTemplate(atoms,bonds,edges,extra)
+			atoms_all.append(copy.deepcopy(atoms))
+			bonds_all.append(copy.deepcopy(bonds))
+			edges_all.append(copy.deepcopy(edges))
+			extra_all.append(copy.deepcopy(extra))
 
-		#-------- end template generation --------#
+		else:
+			if bC_3p == aC:
+				bonds_copy = copy.deepcopy(bonds)
+				bonds_copy.append([0,bC,aC])
+
+				atoms_copy,bonds_copy,edges_copy,extra = renumberAtoms_chargeTemplate(atoms_copy,bonds_copy,edges_copy,extra)
+				atoms_all.append(copy.deepcopy(atoms))
+				bonds_all.append(bonds_copy)
+				edges_all.append(copy.deepcopy(edges))
+				extra_all.append(copy.deepcopy(extra))
+
+			if bC_3p != aC or p.stap_copies > 1:
+				atoms_copy = copy.deepcopy(atoms)
+				bonds_copy = copy.deepcopy(bonds)
+				edges_copy = copy.deepcopy(edges)
+				atoms_copy.append([1,-1,bC_3p])
+				bonds_copy.append([0,bC,bC_3p])
+				edges_copy.append(bC_3p)
+
+				atoms_copy,bonds_copy,edges_copy,extra = renumberAtoms_chargeTemplate(atoms_copy,bonds_copy,edges_copy,extra)
+				atoms_all.append(atoms_copy)
+				bonds_all.append(bonds_copy)
+				edges_all.append(edges_copy)
+				extra_all.append(copy.deepcopy(extra))
+
+		#-------- end bridge templates --------#
+
+		### count reactions
+		nreact = len(atoms_all)
 
 		### loop over both reactions
-		for ri in range(2):
+		for ri in range(nreact):
 
-			molFile = f"{outReactFold}unbrdigeEnds{ri+1}_mol_pre.txt"
+			atoms = atoms_all[ri]
+			bonds = bonds_all[ri]
+			edges = edges_all[ri]
+			extra = extra_all[ri]
+			natom = len(atoms)
+			nbond = len(bonds)
+			nedge = len(edges)
+
+			molFile = f"{outReactFold}unbridge{ri+1}_mol_bondYa.txt"
 			with open(molFile, 'w') as f:
 
 				f.write("## Hybridization\n")
@@ -1678,7 +1816,7 @@ def writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_cros
 					f.write(f"{bondi+1}\t{bonds[bondi][0]+1}\t{bonds[bondi][1]+1}\t{bonds[bondi][2]+1}\n")
 
 				f.write("\nAngles\n\n")
-				f.write(f"1\t1\t4\t5\t6\n")
+				f.write(f"1\t1\t3\t4\t5\n")
 
 				f.write("\nCharges\n\n")
 				for atomi in range(natom):
@@ -1690,7 +1828,7 @@ def writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_cros
 				f.write("3\t3\n")
 				f.write("4\t1 2 3\n")
 
-			molFile = f"{outReactFold}unbrdigeEnds{ri+1}_mol_pst.txt"
+			molFile = f"{outReactFold}unbridge{ri+1}_mol_bondNo.txt"
 			with open(molFile, 'w') as f:
 
 				f.write("## Hybridization\n")
@@ -1709,7 +1847,7 @@ def writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_cros
 						f.write(f"{bondi+1}\t{bonds[bondi][0]+1}\t{bonds[bondi][1]+1}\t{bonds[bondi][2]+1}\n")
 
 				f.write("\nAngles\n\n")
-				f.write(f"1\t1\t4\t5\t6\n")
+				f.write(f"1\t1\t3\t4\t5\n")
 
 				f.write("\nCharges\n\n")
 				for atomi in range(natom):
@@ -1721,13 +1859,13 @@ def writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_cros
 				f.write("3\t3\n")
 				f.write("4\t1 2 3\n")
 
-			mapFile = f"{outReactFold}chargeDehyb{ri+1:0>{len_nreact}}_map.txt"
+			mapFile = f"{outReactFold}unbridge{ri+1}_map.txt"
 			with open(mapFile, 'w') as f:
 
 				f.write("## Hybridization\n")
 				f.write(f"{natom} equivalences\n")
 				f.write(f"{nedge} edgeIDs\n")
-				f.write(f"{nconstraint} constraints\n")
+				f.write(f"5 constraints\n")
 
 				f.write(f"\nInitiatorIDs\n\n")
 				f.write(f"{extra[0]+1}\n")
@@ -1737,15 +1875,44 @@ def writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_cros
 				for edgei in range(nedge):
 					f.write(f"{edges[edgei]+1}\n")
 
+				### constraints
 				f.write("\nConstraints\n\n")
-				f.write(f"custom \"round(rxnsum(v_varQ,{extra[0]+1})) == {extra[2]+1}\"\n")
-				f.write(f"custom \"round(rxnsum(v_varQ,{atoms_charged_noninit[0]+1})) == {atoms[atoms_charged_noninit[0]][1]+1} || "
-								 f"round(rxnsum(v_varQ,{atoms_charged_noninit[0]+1})) == {atoms[atoms_charged_noninit[0]][1]+3}\"\n")
-				f.write(f"custom \"round(rxnsum(v_varQ,{atoms_charged_noninit[1]+1})) == {atoms[atoms_charged_noninit[1]][1]+1} || "
-								 f"round(rxnsum(v_varQ,{atoms_charged_noninit[1]+1})) == {atoms[atoms_charged_noninit[1]][1]+3}\"\n")
-				if nconstraint == 5:
-					f.write(f"custom \"round(rxnsum(v_varMolID,{extra[0]+1})) != {p.n_scaf}\"\n")
-					f.write(f"custom \"round(rxnsum(v_varMolID,{extra[0]+1})) != 1\"\n")
+
+				### constraint on atom 1
+				f.write(f"custom ")
+				if extra[2][0]:
+					f.write(f"\"round(rxnsum(v_varQ,1)) == {atoms[0][1]+1}\"")
+					if extra[3][0]:
+						f.write(" || ")
+				if extra[3][0]:
+					f.write(f"\"round(rxnsum(v_varQ,1)) == {atoms[0][1]+3}\"")
+				f.write(f"\n")
+
+				### constraint on atom 2
+				f.write(f"custom ")
+				if extra[2][1]:
+					f.write(f"\"round(rxnsum(v_varQ,2)) == {atoms[1][1]+1}\"")
+					if extra[3][1]:
+						f.write(" || ")
+				if extra[3][1]:
+					f.write(f"\"round(rxnsum(v_varQ,2)) == {atoms[1][1]+3}\"")
+				f.write(f"\n")
+
+				### constraint on atom 3
+				f.write(f"custom ")
+				if extra[2][2]:
+					f.write(f"\"round(rxnsum(v_varQ,3)) == {atoms[2][1]+1}\"")
+					if extra[3][2]:
+						f.write(" || ")
+				if extra[3][2]:
+					f.write(f"\"round(rxnsum(v_varQ,3)) == {atoms[2][1]+3}\"")
+				f.write(f"\n")
+
+				### ensure correct location
+				f.write(f"custom \"round(rxnsum(v_varMolID,2)) == 1 || "
+								 f"round(rxnsum(v_varMolID,2)) == {p.n_scaf}\"\n")
+				f.write(f"custom \"round(rxnsum(v_varMolID,3)) == 1 || "
+								 f"round(rxnsum(v_varMolID,3)) == {p.n_scaf}\"\n")
 			
 				f.write("\nEquivalences\n\n")
 				for atomi in range(natom):
@@ -1755,21 +1922,19 @@ def writeReactChargeDehyb(outReactFold, backbone_neighbors, complements, is_cros
 	return nreact, bridgeEnds
 
 
-### write reaction files that connect brdiged scaffold ends
-def writeReactBridgeBond(outReactFold, complements, is_crossover, p):
+### write reaction files that connect bridged scaffold ends
+def writeReactBridgeBond(outReactFold, backbone_neighbors, complements, is_crossover, p):
 
 	### core beads
 	a = p.n_scaf-1
 	b = 0
 	aC = complements[a]
-	bC = complements[b]
 	a_5p = p.n_scaf-2
-	b_3p = 1
 
 	### core topology
-	atoms = [ [0,-1,a], [0,-1,b], [1,-1,bC], [1,-1,aC], [0,is_crossover[a_5p],a_5p], [0,is_crossover[b_3p],b_3p] ]
-	bonds = [ [0,bC,aC], [1,a,aC], [1,b,bC], [0,a_5p,a], [0,b,b_3p] ]
-	edges = [ aC, bC, a_5p, b_3p ]
+	atoms = [ [0,-1,a], [0,-1,b], [1,-1,aC], [0,int(is_crossover[a_5p]),a_5p] ]
+	bonds = [ [1,a,aC], [0,a_5p,a] ]
+	edges = [ b, aC, a_5p ]
 
 	### renumber and count
 	atoms,bonds,edges = renumberAtoms_bridgeTemplate(atoms,bonds,edges)
@@ -1778,13 +1943,13 @@ def writeReactBridgeBond(outReactFold, complements, is_crossover, p):
 	nedge = len(edges)
 
 	### write files
-	molPreFile = f"{outReactFold}bridge_mol_bondNo.txt"
-	with open(molPreFile, 'w') as f:
+	molFile = f"{outReactFold}bridgeEnds_mol_bondNo.txt"
+	with open(molFile, 'w') as f:
 
 		f.write("## Hybridization\n")
 		f.write(f"{natom} atoms\n")
 		f.write(f"{nbond} bonds\n")			
-		f.write(f"1 fragments\n")
+		f.write(f"3 fragments\n")
 
 		f.write("\nTypes\n\n")
 		for atomi in range(natom):
@@ -1799,15 +1964,17 @@ def writeReactBridgeBond(outReactFold, complements, is_crossover, p):
 			f.write(f"{atomi+1}\t{atoms[atomi][1]+1}\n")
 
 		f.write("\nFragments\n\n")
-		f.write("1\t5 6\n")
+		f.write("1\t1\n")
+		f.write("2\t2\n")
+		f.write("3\t4\n")
 
-	molPstFile = f"{outReactFold}bridge_mol_bondYa.txt"
-	with open(molPstFile, 'w') as f:
+	molFile = f"{outReactFold}bridgeEnds_mol_bondYa.txt"
+	with open(molFile, 'w') as f:
 
 		f.write("## Hybridization\n")
 		f.write(f"{natom} atoms\n")
 		f.write(f"{nbond+1} bonds\n")			
-		f.write(f"1 fragments\n")
+		f.write(f"3 fragments\n")
 
 		f.write("\nTypes\n\n")
 		for atomi in range(natom):
@@ -1816,21 +1983,24 @@ def writeReactBridgeBond(outReactFold, complements, is_crossover, p):
 		f.write("\nBonds\n\n")
 		for bondi in range(nbond):
 			f.write(f"{bondi+1}\t{bonds[bondi][0]+1}\t{bonds[bondi][1]+1}\t{bonds[bondi][2]+1}\n")
-		f.write(f"{nbond}\t1\t1\t2\n")
+		f.write(f"{bondi+2}\t1\t1\t2\n")
 
 		f.write("\nCharges\n\n")
 		for atomi in range(natom):
 			f.write(f"{atomi+1}\t{atoms[atomi][1]+1}\n")
 
 		f.write("\nFragments\n\n")
-		f.write("1\t5 6\n")
+		f.write("1\t1\n")
+		f.write("2\t2\n")
+		f.write("3\t4\n")
 
-	mapFile = f"{outReactFold}bridge_map.txt"
+	mapFile = f"{outReactFold}bridgeEnds_map.txt"
 	with open(mapFile, 'w') as f:
 
 		f.write("## Hybridization\n")
 		f.write(f"{natom} equivalences\n")
 		f.write(f"{nedge} edgeIDs\n")
+		f.write(f"3 constraints\n")
 
 		f.write(f"\nInitiatorIDs\n\n")
 		f.write(f"1\n")
@@ -1843,6 +2013,11 @@ def writeReactBridgeBond(outReactFold, complements, is_crossover, p):
 		f.write("\nEquivalences\n\n")
 		for atomi in range(natom):
 			f.write(f"{atomi+1}\t{atomi+1}\n")
+
+		f.write("\nConstraints\n\n")
+		f.write(f"custom \"round(rxnsum(v_varMolID,1)) == {p.n_scaf}\"\n")
+		f.write(f"custom \"round(rxnsum(v_varMolID,2)) == 1\"\n")
+		f.write(f"custom \"round(rxnsum(v_nhyb,2)) == 1\"\n")
 
 
 ### write table for hybridization bond
@@ -1873,7 +2048,7 @@ def writeBondHyb(outSimFold, bond_res, F_forceBind, comm_cutoff, U_barrier_comm,
 				F = 0
 
 			### write point to file
-			f.write(f"{i + 1} {r12:.4f} {U:.4f} {F:.4f}\n")
+			f.write(f"{i+1} {r12:.4f} {U:.4f} {F:.4f}\n")
 
 	### result
 	return npoint
@@ -2165,6 +2340,8 @@ def branchTemplate(atoms,bonds,angls,edges):
 ### renumber atoms (starting from 0) in angle template starting
 def renumberAtoms_angleTemplate(atoms, bonds, angls, edges):
 	atoms_bi = [row[2] for row in atoms]
+	for atomi in range(len(atoms)):
+		atoms[atomi][2] = atomi
 	for bondi in range(len(bonds)):
 		for i in range(1,3):
 			bonds[bondi][i] = atoms_bi.index(bonds[bondi][i])
@@ -2179,6 +2356,8 @@ def renumberAtoms_angleTemplate(atoms, bonds, angls, edges):
 ### renumber atoms (starting from 0) in charge template starting
 def renumberAtoms_chargeTemplate(atoms, bonds, edges, extra):
 	atoms_bi = [row[2] for row in atoms]
+	for atomi in range(len(atoms)):
+		atoms[atomi][2] = atomi
 	for bondi in range(len(bonds)):
 		for i in range(1,3):
 			bonds[bondi][i] = atoms_bi.index(bonds[bondi][i])
@@ -2192,6 +2371,8 @@ def renumberAtoms_chargeTemplate(atoms, bonds, edges, extra):
 ### renumber atoms (starting from 0) in bridge template starting
 def renumberAtoms_bridgeTemplate(atoms, bonds, edges):
 	atoms_bi = [row[2] for row in atoms]
+	for atomi in range(len(atoms)):
+		atoms[atomi][2] = atomi
 	for bondi in range(len(bonds)):
 		for i in range(1,3):
 			bonds[bondi][i] = atoms_bi.index(bonds[bondi][i])
