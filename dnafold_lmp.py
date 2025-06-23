@@ -49,7 +49,7 @@ def main():
 		simTag = ""					# added to desID to get name of simulation folder
 		simType = "experiment"		# where create simulation folder
 		rstapTag = None				# if reserving staples, tag for reserved staples file (None for all staples)
-		rseed = 2					# random seed (also used for naming precise simulation folder)
+		rseed = 3					# random seed (also used for naming precise simulation folder)
 
 		### choose parameters
 		nstep			= 1E6		# steps		- number of simulation steps
@@ -58,7 +58,7 @@ def main():
 		dbox			= 40		# nm		- periodic boundary diameter
 		forceBind		= False		# bool		- whether to force hybridization
 		startBound		= False		# bool		- whether to start at caDNAno positions
-		circularScaf	= False		# bool		- whether the scaffold is circular
+		circularScaf	= True		# bool		- whether the scaffold is circular
 		stap_copies		= 1 		# int		- number of copies for each staples
 
 		### get input files
