@@ -33,6 +33,8 @@ import os
   # make bridge accurate for multiple staple copies, figure out why bridging
   # reaction doesn't always apply.
 
+### this is the misbinding branch
+
 
 ################################################################################
 ### Parameters
@@ -51,7 +53,7 @@ def main():
 		simType = "experiment"		# where create simulation folder
 		rstapTag = None				# tag for reserved staples file (None for not reserving staples)
 		confTag = None				# if starting bound, tag for oxDNA configuration file (None for caDNAno positions)
-		rseed = 1					# random seed (also used for naming precise simulation folder)
+		rseed = 2					# random seed (also used for naming precise simulation folder)
 
 		### choose parameters
 		nstep			= 1E6		# steps		- number of simulation steps
