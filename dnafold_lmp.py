@@ -29,8 +29,9 @@ import os
 
 # To Do
 # find optimal tradeoff between commuication cutoff and bond break, parameterize
-  # 90 degree angular potential, reactions that shortens crossover bond length; 
-  # make sure bridge is accurate for multiple staple copies.
+  # 90 degree angular potential, reactions that shortens crossover bond length, 
+  # make bridge accurate for multiple staple copies, figure out why bridging
+  # reaction doesn't always apply.
 
 
 ################################################################################
@@ -45,20 +46,20 @@ def main():
 	if useMyFiles:
 
 		### chose design
-		desID = "triSS_edit"			# design identification
+		desID = "2HBx4"				# design identification
 		simTag = ""					# added to desID to get name of simulation folder
 		simType = "experiment"		# where create simulation folder
-		rstapTag = "_baigl"			# tag for reserved staples file (None for not reserving staples)
-		confTag = "_ideal"			# if starting bound, tag for oxDNA configuration file
+		rstapTag = None				# tag for reserved staples file (None for not reserving staples)
+		confTag = None				# if starting bound, tag for oxDNA configuration file (None for caDNAno positions)
 		rseed = 1					# random seed (also used for naming precise simulation folder)
 
 		### choose parameters
 		nstep			= 1E6		# steps		- number of simulation steps
 		nstep_relax		= 1E5		# steps		- number of steps for relaxation
 		dump_every		= 1E4		# steps		- number of steps between positions dumps
-		dbox			= 100		# nm		- periodic boundary diameter
+		dbox			= 40		# nm		- periodic boundary diameter
 		forceBind		= False		# bool		- whether to force hybridization
-		startBound		= True		# bool		- whether to start at caDNAno positions
+		startBound		= False		# bool		- whether to start at caDNAno positions
 		circularScaf	= True		# bool		- whether the scaffold is circular
 		stap_copies		= 1 		# int		- number of copies for each staples
 
@@ -142,12 +143,12 @@ def main():
 ### read input file
 def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, oxFiles=None, nstep=None, nstep_relax=1E5, dump_every=1E4, dbox=100, forceBind=False, startBound=False, circularScaf=True, stap_copies=1):
 
-	### list keys that can have 'None' as their final value
-	allow_none_default = {'rstapFile'}
-
 	### set oxDNA files
 	topFile = oxFiles[0] if oxFiles is not None else None
 	confFile = oxFiles[1] if oxFiles is not None else None
+
+	### list keys that can have 'None' as their final value
+	allow_none_default = {'rstapFile','topFile','confFile'}
 
 	### define parameters with their default values
 	param_defaults = {
@@ -175,7 +176,7 @@ def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, oxFiles=None, 
 		'r12_eq':		2.72,			# nm			- equilibrium bead separation
 		'k_x': 			120.0,			# kcal/mol/nm2	- backbone spring constant (standard definition)
 		'r12_cut_hyb':	2.0,			# nm			- hybridization potential cutoff radius
-		'U_hyb':		8.0,			# kcal/mol		- depth of hybridization potential
+		'U_hyb':		10.0,			# kcal/mol		- depth of hybridization potential
 		'dsLp': 		50.0			# nm			- persistence length of dsDNA
 	}
 
@@ -221,7 +222,7 @@ def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, oxFiles=None, 
 				if not line or line.startswith('#'):
 					continue
 				if '=' not in line:
-					print(f"Error: Invalid line in config file: {line}")
+					print(f"Error: Invalid line in input file: {line}")
 					sys.exit()
 				key, value = map(str.strip, line.split('=', 1))
 				if key not in param_defaults:
@@ -585,7 +586,7 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_hybBond, nreact_an
 
 		### angle dehybridization reactions
 		for ri in range(nreact_angleDehyb): f.write(
-	  	   f" &\n                react angleDehyb{ri+1} all {int(react_every_angleDehyb)} {p.r12_cut_hyb:.1f} {comm_cutoff} angleDehyb{ri+1}_mol angleDehyb{ri+1}_mol react/angleDehyb{ri+1}_map.txt custom_charges 4")
+	  	   f" &\n                react angleDehyb{ri+1} all {int(react_every_angleDehyb)} {p.r12_cut_hyb:.1f} {comm_cutoff} angleDehyb{ri+1}_mol angleDehyb{ri+1}_mol react/angleDehyb{ri+1}_map.txt custom_charges 1")
 
 		### bond dehybridization reactions
 		for ri in range(nreact_hybBond): f.write(
@@ -664,7 +665,7 @@ def writeReactHybBond(outReactFold, backbone_neighbors, complements, p):
 	edges_all = []
 
 	### two flanking scaffold beads
-	atoms = [ [0,0], [1,1], [0,2], [0,3] ]
+	atoms = [ [0,-1,0], [1,-1,1], [0,-1,2], [0,-1,3] ]
 	bonds = [ [0,2,0], [0,0,3] ]
 	edges = [ 1, 2, 3 ]
 	atoms_all.append(atoms)
@@ -673,7 +674,7 @@ def writeReactHybBond(outReactFold, backbone_neighbors, complements, p):
 
 	### one flanking scaffold bead
 	if not p.circularScaf:
-		atoms = [ [0,0], [1,1], [0,2] ]
+		atoms = [ [0,-1,0], [1,-1,1], [0,-1,2] ]
 		bonds = [ [0,2,0] ]
 		edges = [ 1, 2 ]
 		atoms_all.append(atoms)
@@ -692,7 +693,7 @@ def writeReactHybBond(outReactFold, backbone_neighbors, complements, p):
 		nedge = len(edges)
 
 		### count constraints
-		nconstraint = 1 + sum(1 for x in atoms if x[1] == 0)
+		nconstraint = 1 + sum(1 for x in atoms if x[0] == 0)
 
 		molFile = f"{outReactFold}hybBond{ri+1}_mol_bondNo.txt"
 		with open(molFile, 'w') as f:
@@ -754,7 +755,7 @@ def writeReactHybBond(outReactFold, backbone_neighbors, complements, p):
 			f.write("\nConstraints\n\n")
 			f.write(f"custom \"rxnsum(v_varMolID,1) == rxnsum(v_varMolID,2)\"\n")
 			for atomi in range(natom):
-				if atoms[1] == 0:
+				if atoms[atomi][0] == 0:
 					f.write(f"custom \"rxnsum(v_varQ,{atomi+1}) == 1 || rxnsum(v_varQ,{atomi+1}) == 2\"\n")
 
 			f.write("\nEquivalences\n\n")
@@ -1158,7 +1159,7 @@ def writeReactAngleDehyb(outReactFold, backbone_neighbors, complements, is_cross
 
 	### core topology
 	atoms = [ [0,0,0], [1,-1,1], [0,0,2], [0,0,3] ]
-	bonds = [ [1,0,1], [0,2,0], [1,0,3] ]
+	bonds = [ [1,0,1], [0,2,0], [0,0,3] ]
 	edges = [ 1, 2, 3 ]
 
 	### all 180
@@ -1274,10 +1275,10 @@ def writeReactAngleDehyb(outReactFold, backbone_neighbors, complements, is_cross
 
 			f.write("\nConstraints\n\n")
 			f.write(f"custom \"round(rxnsum(v_varQ,2)) == {atoms[0][1]+3}\"\n")
-			f.write(f"custom \"round(rxnsum(v_varQ,3)) == {atoms[2][1]+1}\" || "
-				           f"\"round(rxnsum(v_varQ,3)) == {atoms[2][1]+3}\"\n")
-			f.write(f"custom \"round(rxnsum(v_varQ,4)) == {atoms[3][1]+1}\" || "
-						   f"\"round(rxnsum(v_varQ,4)) == {atoms[3][1]+3}\"\n")
+			f.write(f"custom \"round(rxnsum(v_varQ,3)) == {atoms[2][1]+1} || "
+				        	 f"round(rxnsum(v_varQ,3)) == {atoms[2][1]+3}\"\n")
+			f.write(f"custom \"round(rxnsum(v_varQ,4)) == {atoms[3][1]+1} || "
+							 f"round(rxnsum(v_varQ,4)) == {atoms[3][1]+3}\"\n")
 
 			### avoid ends when appropriate
 			if bridgeEnds:
@@ -1297,7 +1298,6 @@ def writeReactAngleDehyb(outReactFold, backbone_neighbors, complements, is_cross
 		atoms_all = []
 		bonds_all = []
 		edges_all = []
-		extra_all = []
 
 		### 5' end
 		if complements[0] != -1:
@@ -1324,9 +1324,9 @@ def writeReactAngleDehyb(outReactFold, backbone_neighbors, complements, is_cross
 			edges_all.append(copy.deepcopy(edges))
 
 		### remove possible duplicates
-		templates = [[a,b,c,d] for a,b,c,d in zip(atoms_all,bonds_all,edges_all,extra_all)]
+		templates = [[a,b,c] for a,b,c in zip(atoms_all,bonds_all,edges_all)]
 		templates = removeDuplicateElements(templates)
-		atoms_all,bonds_all,edges_all,extra_all = unzip4(templates)
+		atoms_all,bonds_all,edges_all = unzip3(templates)
 
 		### count reactions
 		nreact_linear = len(atoms_all)
@@ -1338,7 +1338,6 @@ def writeReactAngleDehyb(outReactFold, backbone_neighbors, complements, is_cross
 			atoms = atoms_all[ri]
 			bonds = bonds_all[ri]
 			edges = edges_all[ri]
-			extra = extra_all[ri]
 			natom = len(atoms)
 			nbond = len(bonds)
 			nedge = len(edges)
@@ -1386,8 +1385,8 @@ def writeReactAngleDehyb(outReactFold, backbone_neighbors, complements, is_cross
 
 				f.write("\nConstraints\n\n")
 				f.write(f"custom \"round(rxnsum(v_varQ,2)) == {atoms[0][1]+3}\"\n")
-				f.write(f"custom \"round(rxnsum(v_varQ,3)) == {atoms[2][1]+1}\" || "
-					           f"\"round(rxnsum(v_varQ,3)) == {atoms[2][1]+3}\"\n")
+				f.write(f"custom \"round(rxnsum(v_varQ,3)) == {atoms[2][1]+1} || "
+					        	 f"round(rxnsum(v_varQ,3)) == {atoms[2][1]+3}\"\n")
 			
 				f.write("\nEquivalences\n\n")
 				for atomi in range(natom):
@@ -1407,15 +1406,15 @@ def writeReactBridge(outReactFold, bridgeEnds, backbone_neighbors, complements, 
 	#-------- bridging reaction --------#
 
 	### core beads
-	a = p.n_scaf-1
-	b = 0
+	a = 0
 	aC = complements[a]
-	a_5p = p.n_scaf-2
+	a_5p = p.n_scaf-1
+	a_3p = 1
 
 	### core topology
-	atoms = [ [0,-1,a], [0,-1,b], [1,-1,aC], [0,int(is_crossover[a_5p]),a_5p] ]
-	bonds = [ [1,a,aC], [0,a_5p,a] ]
-	edges = [ b, aC, a_5p ]
+	atoms = [ [0,-1,a], [1,-1,aC], [0,-1,a_5p], [0,int(is_crossover[a_3p]),a_3p] ]
+	bonds = [ [1,a,aC], [0,a,a_3p] ]
+	edges = [ aC, a_5p, a_3p ]
 
 	### renumber and count
 	atoms,bonds,edges = renumberAtoms_bridgeTemplate(atoms,bonds,edges)
@@ -1445,9 +1444,9 @@ def writeReactBridge(outReactFold, bridgeEnds, backbone_neighbors, complements, 
 			f.write(f"{atomi+1}\t{atoms[atomi][1]+1}\n")
 
 		f.write("\nFragments\n\n")
-		f.write("1\t1\n")
-		f.write("2\t2\n")
-		f.write("3\t4\n")
+		f.write("1\t4\n")
+		f.write("2\t1\n")
+		f.write("3\t3\n")
 
 	molFile = f"{outReactFold}bridge_mol_bondYa.txt"
 	with open(molFile, 'w') as f:
@@ -1464,16 +1463,16 @@ def writeReactBridge(outReactFold, bridgeEnds, backbone_neighbors, complements, 
 		f.write("\nBonds\n\n")
 		for bondi in range(nbond):
 			f.write(f"{bondi+1}\t{bonds[bondi][0]+1}\t{bonds[bondi][1]+1}\t{bonds[bondi][2]+1}\n")
-		f.write(f"{bondi+2}\t1\t1\t2\n")
+		f.write(f"{bondi+2}\t1\t3\t1\n")
 
 		f.write("\nCharges\n\n")
 		for atomi in range(natom):
 			f.write(f"{atomi+1}\t{atoms[atomi][1]+1}\n")
 
 		f.write("\nFragments\n\n")
-		f.write("1\t1\n")
-		f.write("2\t2\n")
-		f.write("3\t4\n")
+		f.write("1\t4\n")
+		f.write("2\t1\n")
+		f.write("3\t3\n")
 
 	mapFile = f"{outReactFold}bridge_map.txt"
 	with open(mapFile, 'w') as f:
@@ -1485,7 +1484,7 @@ def writeReactBridge(outReactFold, bridgeEnds, backbone_neighbors, complements, 
 
 		f.write(f"\nInitiatorIDs\n\n")
 		f.write(f"1\n")
-		f.write(f"2\n")
+		f.write(f"3\n")
 
 		f.write(f"\nEdgeIDs\n\n")
 		for edgei in range(nedge):
@@ -1496,9 +1495,9 @@ def writeReactBridge(outReactFold, bridgeEnds, backbone_neighbors, complements, 
 			f.write(f"{atomi+1}\t{atomi+1}\n")
 
 		f.write("\nConstraints\n\n")
-		f.write(f"custom \"round(rxnsum(v_varMolID,1)) == {p.n_scaf}\"\n")
 		f.write(f"custom \"round(rxnsum(v_varMolID,2)) == 1\"\n")
-		f.write(f"custom \"round(rxnsum(v_nhyb,2)) == 1\"\n")
+		f.write(f"custom \"round(rxnsum(v_varMolID,3)) == {p.n_scaf}\"\n")
+		f.write(f"custom \"round(rxnsum(v_nhyb,3)) == 1\"\n")
 
 	#-------- unbridging reaction --------#
 
@@ -1513,18 +1512,20 @@ def writeReactBridge(outReactFold, bridgeEnds, backbone_neighbors, complements, 
 
 	### center as 5' end
 	atoms = [ [0,int(is_crossover[0]),0], [1,-1,1], [0,int(is_crossover[p.n_scaf-1]),2], [0,int(is_crossover[1]),3] ]
-	bonds = [ [1,0,1], [0,2,0], [0,0,3] ]
+	bonds = [ [1,0,1], [0,0,3] ]
 	edges = [ 1, 2, 3 ]
 
+	atoms,bonds,edges = renumberAtoms_bridgeTemplate(atoms,bonds,edges)
 	atoms_all.append(copy.deepcopy(atoms))
 	bonds_all.append(copy.deepcopy(bonds))
 	edges_all.append(copy.deepcopy(edges))
 
 	### center as 3' end
 	atoms = [ [0,int(is_crossover[p.n_scaf-1]),0], [1,-1,1], [0,int(is_crossover[0]),2], [0,int(is_crossover[p.n_scaf-2]),3] ]
-	bonds = [ [1,0,1], [0,2,0], [0,0,3] ]
+	bonds = [ [1,0,1], [0,0,3] ]
 	edges = [ 1, 2, 3 ]
 
+	atoms,bonds,edges = renumberAtoms_bridgeTemplate(atoms,bonds,edges)
 	atoms_all.append(copy.deepcopy(atoms))
 	bonds_all.append(copy.deepcopy(bonds))
 	edges_all.append(copy.deepcopy(edges))
@@ -1552,7 +1553,7 @@ def writeReactBridge(outReactFold, bridgeEnds, backbone_neighbors, complements, 
 
 			f.write("## Hybridization\n")
 			f.write(f"{natom} atoms\n")
-			f.write(f"{nbond} bonds\n")			
+			f.write(f"{nbond+1} bonds\n")			
 			f.write(f"4 fragments\n")
 
 			f.write("\nTypes\n\n")
@@ -1562,6 +1563,7 @@ def writeReactBridge(outReactFold, bridgeEnds, backbone_neighbors, complements, 
 			f.write("\nBonds\n\n")
 			for bondi in range(nbond):
 				f.write(f"{bondi+1}\t{bonds[bondi][0]+1}\t{bonds[bondi][1]+1}\t{bonds[bondi][2]+1}\n")
+			f.write(f"{bondi+2}\t1\t3\t1\n")
 
 			f.write("\nCharges\n\n")
 			for atomi in range(natom):
@@ -1578,7 +1580,7 @@ def writeReactBridge(outReactFold, bridgeEnds, backbone_neighbors, complements, 
 
 			f.write("## Hybridization\n")
 			f.write(f"{natom} atoms\n")
-			f.write(f"{nbond-1} bonds\n")			
+			f.write(f"{nbond} bonds\n")			
 			f.write(f"4 fragments\n")
 
 			f.write("\nTypes\n\n")
@@ -1587,8 +1589,7 @@ def writeReactBridge(outReactFold, bridgeEnds, backbone_neighbors, complements, 
 
 			f.write("\nBonds\n\n")
 			for bondi in range(nbond):
-				if bondi != 1:
-					f.write(f"{bondi+1}\t{bonds[bondi][0]+1}\t{bonds[bondi][1]+1}\t{bonds[bondi][2]+1}\n")
+				f.write(f"{bondi+1}\t{bonds[bondi][0]+1}\t{bonds[bondi][1]+1}\t{bonds[bondi][2]+1}\n")
 
 			f.write("\nCharges\n\n")
 			for atomi in range(natom):
@@ -1617,18 +1618,16 @@ def writeReactBridge(outReactFold, bridgeEnds, backbone_neighbors, complements, 
 				f.write(f"{edges[edgei]+1}\n")
 
 			f.write("\nConstraints\n\n")
-			f.write(f"custom \"round(rxnsum(v_varQ,3)) == {atoms[0][1]+1}\" || "
-				           f"\"round(rxnsum(v_varQ,3)) == {atoms[0][1]+3}\"\n")
-			f.write(f"custom \"round(rxnsum(v_varQ,3)) == {atoms[2][1]+1}\" || "
-				           f"\"round(rxnsum(v_varQ,3)) == {atoms[2][1]+3}\"\n")
-			f.write(f"custom \"round(rxnsum(v_varQ,4)) == {atoms[3][1]+1}\" || "
-						   f"\"round(rxnsum(v_varQ,4)) == {atoms[3][1]+3}\"\n")
-
-			### avoid ends when appropriate
-			f.write(f"custom \"round(rxnsum(v_varMolID,2)) == 1\" || "
-				           f"\"round(rxnsum(v_varMolID,2)) == {p.n_scaf}\"\n")
-			f.write(f"custom \"round(rxnsum(v_varMolID,3)) == 1\" || "
-				           f"\"round(rxnsum(v_varMolID,3)) == {p.n_scaf}\"\n")
+			f.write(f"custom \"round(rxnsum(v_varMolID,2)) == 1 || "
+				        	 f"round(rxnsum(v_varMolID,2)) == {p.n_scaf}\"\n")
+			f.write(f"custom \"round(rxnsum(v_varMolID,3)) == 1 || "
+				        	 f"round(rxnsum(v_varMolID,3)) == {p.n_scaf}\"\n")
+			f.write(f"custom \"round(rxnsum(v_varQ,2)) == {atoms[0][1]+1} || "
+				        	 f"round(rxnsum(v_varQ,2)) == {atoms[0][1]+3}\"\n")
+			f.write(f"custom \"round(rxnsum(v_varQ,3)) == {atoms[2][1]+1} || "
+				        	 f"round(rxnsum(v_varQ,3)) == {atoms[2][1]+3}\"\n")
+			f.write(f"custom \"round(rxnsum(v_varQ,4)) == {atoms[3][1]+1} || "
+							 f"round(rxnsum(v_varQ,4)) == {atoms[3][1]+3}\"\n")
 		
 			f.write("\nEquivalences\n\n")
 			for atomi in range(natom):
