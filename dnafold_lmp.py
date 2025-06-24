@@ -45,28 +45,30 @@ def main():
 	if useMyFiles:
 
 		### chose design
-		desID = "2HBx4"				# design identification
+		desID = "triSS_edit"			# design identification
 		simTag = ""					# added to desID to get name of simulation folder
 		simType = "experiment"		# where create simulation folder
-		rstapTag = None				# if reserving staples, tag for reserved staples file (None for all staples)
-		rseed = 2					# random seed (also used for naming precise simulation folder)
+		rstapTag = "_baigl"			# tag for reserved staples file (None for not reserving staples)
+		confTag = "_ideal"			# if starting bound, tag for oxDNA configuration file
+		rseed = 1					# random seed (also used for naming precise simulation folder)
 
 		### choose parameters
 		nstep			= 1E6		# steps		- number of simulation steps
 		nstep_relax		= 1E5		# steps		- number of steps for relaxation
 		dump_every		= 1E4		# steps		- number of steps between positions dumps
-		dbox			= 40		# nm		- periodic boundary diameter
+		dbox			= 100		# nm		- periodic boundary diameter
 		forceBind		= False		# bool		- whether to force hybridization
-		startBound		= False		# bool		- whether to start at caDNAno positions
-		circularScaf	= False		# bool		- whether the scaffold is circular
+		startBound		= True		# bool		- whether to start at caDNAno positions
+		circularScaf	= True		# bool		- whether the scaffold is circular
 		stap_copies		= 1 		# int		- number of copies for each staples
 
 		### get input files
 		cadFile = utilsLocal.getCadFile(desID)
 		rstapFile = utilsLocal.getRstapFile(desID, rstapTag) if rstapTag is not None else None
+		oxFiles = utilsLocal.getOxFiles(desID, confTag) if confTag is not None else None
 
 		### set parameters
-		cadFile, rstapFile, p = readInput(None, rseed, cadFile, rstapFile, nstep, nstep_relax, dump_every, dbox, forceBind, startBound, circularScaf, stap_copies)
+		cadFile, rstapFile, oxFiles, p = readInput(None, rseed, cadFile, rstapFile, oxFiles, nstep, nstep_relax, dump_every, dbox, forceBind, startBound, circularScaf, stap_copies)
 		
 		### set output folder
 		outFold = utilsLocal.getSimHomeFold(desID, simTag, simType)
@@ -93,7 +95,7 @@ def main():
 		rseed = args.rseed
 
 		### set parameters
-		cadFile, rstapFile, p = readInput(inFile, rseed)
+		cadFile, rstapFile, topFile, confFile, p = readInput(inFile, rseed)
 
 		### set output folder
 		outFold = "./"
@@ -121,32 +123,38 @@ def main():
 	ars.createEmptyFold(outReactFold)
 
 	### write geometry files
-	r, nhyb, nangle = composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossover, is_reserved_strand, cadFile, p)
+	r, nhyb, nangle = composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossover, is_reserved_strand, cadFile, oxFiles, p)
 	composeGeoVis(outSimFold, strands, backbone_neighbors, r, p)
 
 	### write react files
-	writeReactHybBond(outReactFold, backbone_neighbors, complements, p)
+	nreact_hybBond = writeReactHybBond(outReactFold, backbone_neighbors, complements, p)
 	nreact_angleHyb = writeReactAngleHyb(outReactFold, backbone_neighbors, complements, is_crossover, p)
 	nreact_angleDehyb, bridgeEnds = writeReactAngleDehyb(outReactFold, backbone_neighbors, complements, is_crossover, p)
 	nreact_unbridge = writeReactBridge(outReactFold, bridgeEnds, backbone_neighbors, complements, is_crossover, p)
 
 	### write lammps input file
-	writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_angleHyb, nreact_angleDehyb, bridgeEnds, nreact_unbridge, p)
+	writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_hybBond, nreact_angleHyb, nreact_angleDehyb, bridgeEnds, nreact_unbridge, p)
 
 
 ################################################################################
 ### File Handlers
 
 ### read input file
-def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, nstep=None, nstep_relax=1E5, dump_every=1E4, dbox=100, forceBind=False, startBound=False, circularScaf=True, stap_copies=1):
+def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, oxFiles=None, nstep=None, nstep_relax=1E5, dump_every=1E4, dbox=100, forceBind=False, startBound=False, circularScaf=True, stap_copies=1):
 
 	### list keys that can have 'None' as their final value
 	allow_none_default = {'rstapFile'}
+
+	### set oxDNA files
+	topFile = oxFiles[0] if oxFiles is not None else None
+	confFile = oxFiles[1] if oxFiles is not None else None
 
 	### define parameters with their default values
 	param_defaults = {
 		'cadFile':		cadFile,		# str			- name of caDNAno file (required)
 		'rstapFile':	rstapFile,		# str			- name of reserved staples file
+		'topFile':		topFile,		# str			- name of topology file
+		'confFile':		confFile,		# str			- name of configuration file
 		'nstep': 		nstep,			# steps			- number of simulation steps (required)
 		'nstep_relax': 	nstep_relax,	# steps			- number of steps for relaxation
 		'dump_every': 	dump_every,		# steps			- number of steps between positions dumps
@@ -175,6 +183,8 @@ def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, nstep=None, ns
 	param_types = {
 		'cadFile':		str,
 		'rstapFile':	str,
+		'topFile':		str,
+		'confFile':		str,
 		'nstep':		lambda x: int(float(x)),
 		'nstep_relax':	lambda x: int(float(x)),
 		'dump_every':	lambda x: int(float(x)),
@@ -235,11 +245,33 @@ def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, nstep=None, ns
 	### get caDNAno file
 	cadFile = params['cadFile']
 	del params['cadFile']
+	ars.testFileExist(cadFile,"caDNAno")
 
 	### get reserved staples file
 	rstapFile = params['rstapFile']
 	del params['rstapFile']
+	ars.testFileExist(cadFile,"reserved staples")
 	params['reserveStap'] = False if rstapFile is None else True
+
+	### get topology file
+	topFile = params['topFile']
+	del params['topFile']
+	if topFile is not None and not startBound:
+		print("Flag: oxDNA topology file given but not used.")
+
+	### get topology file
+	confFile = params['confFile']
+	del params['confFile']
+	if confFile is not None and not startBound:
+		print("Flag: oxDNA configuration file given but not used.")
+
+	### oxDNA files
+	if topFile is not None and confFile is not None:
+		oxFiles = [topFile,confFile]
+	elif topFile is not None:
+		print("Flag: oxDNA topology file given without configuration file, not using.")
+	elif confFile is not None:
+		print("Flag: oxDNA configuration file given without topology file, not using.")
 
 	### add parameters not set though input file
 	params['rseed'] = rseed
@@ -247,7 +279,7 @@ def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, nstep=None, ns
 
 	### convert into parameters class and return
 	p = parameters.parameters(params)
-	return cadFile, rstapFile, p
+	return cadFile, rstapFile, oxFiles, p
 
 
 ### read reserved staples file
@@ -270,23 +302,19 @@ def readRstap(rstapFile, p):
 
 
 ### write lammps geometry file, for simulation
-def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossover, is_reserved_strand, cadFile, p):
+def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossover, is_reserved_strand, cadFile, oxFiles, p):
 	print("Writing simulation geometry file...")
-
-	### currently, oxDNA positions only available through local file structure
-	oxdnaPositions = False
-	desID = "triSS_edit"
-	confTag = "_ideal"
 
 	### initailize positions
 	if p.startBound:
 		stap_offset = 0.01
-		if not oxdnaPositions:
-			r = utils.initPositionsCaDNAno(cadFile)[0]
+		if oxFiles is not None:
+			r = utils.initPositionsOxDNA(cadFile, oxFiles[0], oxFiles[1])[0]
 		else:
-			topFile, confFile = utilsLocal.getOxFiles(desID, confTag)
-			r = utils.initPositionsOxDNA(cadFile, topFile, confFile)[0]
+			r = utils.initPositionsCaDNAno(cadFile)[0]
 		r[p.n_scaf:] += stap_offset
+		if p.reserveStap:
+			r = randomStapPositions(r, strands, is_reserved_strand, p)
 	else:
 		r = initPositions(strands, p)
 	r = np.append(r,np.zeros((1,3)),axis=0)
@@ -314,7 +342,7 @@ def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossove
 			if complements[obi] != -1:
 				if ci == 0:
 					nhyb += 1
-			if is_reserved_strand[strands[obi]]:
+			if is_reserved_strand[strands[obi]] and not p.startBound:
 				types[rbi] = 3
 				r[rbi] = [0,0,0]
 
@@ -337,7 +365,7 @@ def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossove
 	for ci in range(p.stap_copies):
 		for obi in range(p.n_scaf,p.n_ori):
 			if backbone_neighbors[obi][1] != -1:
-				if is_reserved_strand[strands[obi]]:
+				if is_reserved_strand[strands[obi]] and not p.startBound:
 					type = 3
 				else:
 					type = 1
@@ -412,7 +440,7 @@ def composeGeoVis(outSimFold, strands, backbone_neighbors, r, p):
 
 
 ### write lammps input file for lammps
-def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_angleHyb, nreact_angleDehyb, bridgeEnds, nreact_unbridge, p):
+def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_hybBond, nreact_angleHyb, nreact_angleDehyb, bridgeEnds, nreact_unbridge, p):
 	print("Writing input file...")
 
 	### computational parameters
@@ -432,11 +460,11 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_angleHyb, nreact_a
 	if p.forceBind:
 		comm_cutoff = int(np.sqrt(3)*p.dbox+1)
 
-	### prep for writing files
-	len_nreact_angleHyb = len(str(nreact_angleHyb))
-
 	### write table for hybridization bond
 	npoint_bond = writeBondHyb(outSimFold, bond_res, F_forceBind, comm_cutoff, U_barrier_comm, p)
+
+	### count digits
+	len_nraH = len(str(nreact_angleHyb))
 
 	### open file
 	outLammpsFile = outSimFold + "lammps.in"
@@ -517,25 +545,22 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_angleHyb, nreact_a
 			"## Molecules\n")
 
 		### bond templates
-		if not p.forceBind: f.write(
-		   f"molecule        hybBondMid_mol_bondNo react/hybBondMid_mol_bondNo.txt\n"
-		   f"molecule        hybBondMid_mol_bondYa react/hybBondMid_mol_bondYa.txt\n")
-		if not p.forceBind and not p.circularScaf: f.write(
-		   f"molecule        hybBondEnd_mol_bondNo react/hybBondEnd_mol_bondNo.txt\n"
-		   f"molecule        hybBondEnd_mol_bondYa react/hybBondEnd_mol_bondYa.txt\n")
+		for ri in range(nreact_hybBond): f.write(
+		   f"molecule        hybBond{ri+1}_mol_bondNo react/hybBond{ri+1}_mol_bondNo.txt\n"
+		   f"molecule        hybBond{ri+1}_mol_bondYa react/hybBond{ri+1}_mol_bondYa.txt\n")
+
+		### angle hybridization templates
+		for ri in range(nreact_angleHyb): f.write(
+		   f"molecule        angleHyb{ri+1:0>{len_nraH}}_mol react/angleHyb{ri+1:0>{len_nraH}}_mol.txt\n")
+
+		### angle dehybridization templates
+		for ri in range(nreact_angleDehyb): f.write(
+		   f"molecule        angleDehyb{ri+1}_mol react/angleDehyb{ri+1}_mol.txt\n")
 
 		### bridge creating templates
 		if bridgeEnds: f.write(
 		   f"molecule        bridge_mol_bondNo react/bridge_mol_bondNo.txt\n"
 		   f"molecule        bridge_mol_bondYa react/bridge_mol_bondYa.txt\n")
-
-		### angle hybridization templates
-		for ri in range(nreact_angleHyb): f.write(
-		   f"molecule        angleHyb{ri+1:0>{len_nreact_angleHyb}}_mol react/angleHyb{ri+1:0>{len_nreact_angleHyb}}_mol.txt\n")
-
-		### angle dehybridization templates
-		for ri in range(nreact_angleDehyb): f.write(
-		   f"molecule        angleDehyb{ri+1}_mol react/angleDehyb{ri+1}_mol.txt\n")
 
 		### bridge breaking templates
 		for ri in range(nreact_unbridge): f.write(
@@ -551,32 +576,29 @@ def writeInput(outSimFold, is_crossover, nhyb, nangle, nreact_angleHyb, nreact_a
 			"fix             reactions all bond/react reset_mol_ids no")
 
 		### bond hybridization reactions
-		if not p.forceBind: f.write(
-		   f" &\n                react bondHybMid all {int(react_every_bondHyb)} 0.0 {r12_cut_react_hybBond:.1f} hybBondMid_mol_bondNo hybBondMid_mol_bondYa react/hybBondMid_map.txt")
-		if not p.forceBind and not p.circularScaf: f.write(
-		   f" &\n                react bondHybEnd all {int(react_every_bondHyb)} 0.0 {r12_cut_react_hybBond:.1f} hybBondEnd_mol_bondNo hybBondEnd_mol_bondYa react/hybBondEnd_map.txt")
-		
+		for ri in range(nreact_hybBond): f.write(
+		   f" &\n                react bondHyb{ri+1} all {int(react_every_bondHyb)} 0.0 {r12_cut_react_hybBond:.1f} hybBond{ri+1}_mol_bondNo hybBond{ri+1}_mol_bondYa react/hybBond{ri+1}_map.txt")
+
+		### angle hybridization reactions
+		for ri in range(nreact_angleHyb): f.write(
+		   f" &\n                react angleHyb{ri+1:0>{len_nraH}} all {int(react_every_angleHyb)} 0.0 {p.r12_cut_hyb:.1f} angleHyb{ri+1:0>{len_nraH}}_mol angleHyb{ri+1:0>{len_nraH}}_mol react/angleHyb{ri+1:0>{len_nraH}}_map.txt custom_charges 4")
+
+		### angle dehybridization reactions
+		for ri in range(nreact_angleDehyb): f.write(
+	  	   f" &\n                react angleDehyb{ri+1} all {int(react_every_angleDehyb)} {p.r12_cut_hyb:.1f} {comm_cutoff} angleDehyb{ri+1}_mol angleDehyb{ri+1}_mol react/angleDehyb{ri+1}_map.txt custom_charges 4")
+
+		### bond dehybridization reactions
+		for ri in range(nreact_hybBond): f.write(
+		   f" &\n                react bondDehyb{ri+1} all {int(react_every_bondDehyb)} {r12_cut_react_hybBond:.1f} {comm_cutoff} hybBond{ri+1}_mol_bondYa hybBond{ri+1}_mol_bondNo react/hybBond{ri+1}_map.txt custom_charges 1")
+
 		### bridge making reaction
 		if bridgeEnds: f.write(
 		   f" &\n                react bridge all {int(react_every_bondHyb)} 0.0 {p.r12_eq:.2f} bridge_mol_bondNo bridge_mol_bondYa react/bridge_map.txt custom_charges 1")
 
-		### angle hybridization reactions
-		for ri in range(nreact_angleHyb): f.write(
-		   f" &\n                react angleHyb{ri+1:0>{len_nreact_angleHyb}} all {int(react_every_angleHyb)} 0.0 {p.r12_cut_hyb:.1f} angleHyb{ri+1:0>{len_nreact_angleHyb}}_mol angleHyb{ri+1:0>{len_nreact_angleHyb}}_mol react/angleHyb{ri+1:0>{len_nreact_angleHyb}}_map.txt custom_charges 4")
-
-		### angle dehybridization reactions
-		for ri in range(nreact_angleDehyb): f.write(
-	  	   f" &\n                react angleDehyb{ri+1} all {int(react_every_angleDehyb)} {p.r12_cut_hyb:.1f} {comm_cutoff} angleDehyb{ri+1}_mol Dehyb{ri+1}_mol react/chargeDehyb{ri+1}_map.txt custom_charges 4")
-
-		### bond dehybridization reactions
-		if not p.forceBind and p.dehyb: f.write(
-		   f" &\n                react bondDehybMid all {int(react_every_bondDehyb)} {r12_cut_react_hybBond:.1f} {comm_cutoff} hybBondMid_mol_bondYa hybBondMid_mol_bondNo react/hybBondMid_map.txt")
-		if not p.forceBind and p.dehyb and not p.circularScaf: f.write(
-		   f" &\n                react bondDehybEnd all {int(react_every_bondDehyb)} {r12_cut_react_hybBond:.1f} {comm_cutoff} hybBondEnd_mol_bondYa hybBondEnd_mol_bondNo react/hybBondEnd_map.txt")
-
-		### bridge breaking reaction
+		### bridge breaking reactions
 		for ri in range(nreact_unbridge): f.write(
-		   f" &\n                react unbridge{ri+1} all {int(react_every_angleDehy)} {p.r12_cut_hyb:.1f} {comm_cutoff} unbridge{ri+1}_mol_bondYa unbridge{ri+1}_mol_bondNo react/unbridge{ri+1}_map.txt custom_charges 1")
+		   f" &\n                react unbridge{ri+1} all {int(react_every_bondDehyb)} {p.r12_cut_hyb:.1f} {comm_cutoff} unbridge{ri+1}_mol_bondYa unbridge{ri+1}_mol_bondNo react/unbridge{ri+1}_map.txt custom_charges 1")
+
 		f.write("\n\n")
 
 		#-------- end reactions --------#
@@ -662,14 +684,6 @@ def writeReactHybBond(outReactFold, backbone_neighbors, complements, p):
 	nreact = len(atoms_all)
 	for ri in range(nreact):
 
-		### reaction tag
-		if ri == 0: tag = "Mid"
-		if ri == 1: tag = "End"
-
-		### scaffold
-		if ri == 0: scaf = [0,2,3]
-		if ri == 1: scaf = [0,2]
-
 		atoms = atoms_all[ri]
 		bonds = bonds_all[ri]
 		edges = edges_all[ri]
@@ -677,7 +691,10 @@ def writeReactHybBond(outReactFold, backbone_neighbors, complements, p):
 		nbond = len(bonds)
 		nedge = len(edges)
 
-		molFile = f"{outReactFold}hybBond{tag}_mol_bondNo.txt"
+		### count constraints
+		nconstraint = 1 + sum(1 for x in atoms if x[1] == 0)
+
+		molFile = f"{outReactFold}hybBond{ri+1}_mol_bondNo.txt"
 		with open(molFile, 'w') as f:
 
 			f.write("## Hybridization\n")
@@ -697,7 +714,7 @@ def writeReactHybBond(outReactFold, backbone_neighbors, complements, p):
 			for atomi in range(natom):
 				f.write(f"{atomi+1}\t{atomi+1}\n")
 
-		molFile = f"{outReactFold}hybBond{tag}_mol_bondYa.txt"
+		molFile = f"{outReactFold}hybBond{ri+1}_mol_bondYa.txt"
 		with open(molFile, 'w') as f:
 
 			f.write("## Hybridization\n")
@@ -718,13 +735,13 @@ def writeReactHybBond(outReactFold, backbone_neighbors, complements, p):
 			for atomi in range(natom):
 				f.write(f"{atomi+1}\t{atomi+1}\n")
 
-		mapFile = f"{outReactFold}hybBond{tag}_map.txt"
+		mapFile = f"{outReactFold}hybBond{ri+1}_map.txt"
 		with open(mapFile, 'w') as f:
 
 			f.write("## Hybridization\n")
 			f.write(f"{natom} equivalences\n")
 			f.write(f"{nedge} edgeIDs\n")
-			f.write(f"{natom} constraints\n")
+			f.write(f"{nconstraint} constraints\n")
 
 			f.write(f"\nInitiatorIDs\n\n")
 			f.write("1\n")
@@ -736,12 +753,16 @@ def writeReactHybBond(outReactFold, backbone_neighbors, complements, p):
 
 			f.write("\nConstraints\n\n")
 			f.write(f"custom \"rxnsum(v_varMolID,1) == rxnsum(v_varMolID,2)\"\n")
-			for atomi in scaf:
-				f.write(f"custom \"rxnsum(v_varQ,{atomi+1}) == 1 || rxnsum(v_varQ,{atomi+1}) == 2\"\n")
+			for atomi in range(natom):
+				if atoms[1] == 0:
+					f.write(f"custom \"rxnsum(v_varQ,{atomi+1}) == 1 || rxnsum(v_varQ,{atomi+1}) == 2\"\n")
 
 			f.write("\nEquivalences\n\n")
 			for atomi in range(natom):
 				f.write(f"{atomi+1}\t{atomi+1}\n")
+
+	### reaction count
+	return nreact
 
 
 ### write reaction files for hybridization angles
@@ -1403,7 +1424,7 @@ def writeReactBridge(outReactFold, bridgeEnds, backbone_neighbors, complements, 
 	nedge = len(edges)
 
 	### write files
-	molFile = f"{outReactFold}bridgeEnds_mol_bondNo.txt"
+	molFile = f"{outReactFold}bridge_mol_bondNo.txt"
 	with open(molFile, 'w') as f:
 
 		f.write("## Hybridization\n")
@@ -1428,7 +1449,7 @@ def writeReactBridge(outReactFold, bridgeEnds, backbone_neighbors, complements, 
 		f.write("2\t2\n")
 		f.write("3\t4\n")
 
-	molFile = f"{outReactFold}bridgeEnds_mol_bondYa.txt"
+	molFile = f"{outReactFold}bridge_mol_bondYa.txt"
 	with open(molFile, 'w') as f:
 
 		f.write("## Hybridization\n")
@@ -1454,7 +1475,7 @@ def writeReactBridge(outReactFold, bridgeEnds, backbone_neighbors, complements, 
 		f.write("2\t2\n")
 		f.write("3\t4\n")
 
-	mapFile = f"{outReactFold}bridgeEnds_map.txt"
+	mapFile = f"{outReactFold}bridge_map.txt"
 	with open(mapFile, 'w') as f:
 
 		f.write("## Hybridization\n")
@@ -1489,7 +1510,6 @@ def writeReactBridge(outReactFold, bridgeEnds, backbone_neighbors, complements, 
 	atoms_all = []
 	bonds_all = []
 	edges_all = []
-	extra_all = []
 
 	### center as 5' end
 	atoms = [ [0,int(is_crossover[0]),0], [1,-1,1], [0,int(is_crossover[p.n_scaf-1]),2], [0,int(is_crossover[1]),3] ]
@@ -1510,9 +1530,9 @@ def writeReactBridge(outReactFold, bridgeEnds, backbone_neighbors, complements, 
 	edges_all.append(copy.deepcopy(edges))
 
 	### remove possible duplicates
-	templates = [[a,b,c,d] for a,b,c,d in zip(atoms_all,bonds_all,edges_all,extra_all)]
+	templates = [[a,b,c] for a,b,c in zip(atoms_all,bonds_all,edges_all)]
 	templates = removeDuplicateElements(templates)
-	atoms_all,bonds_all,edges_all,extra_all = unzip4(templates)
+	atoms_all,bonds_all,edges_all = unzip3(templates)
 
 	### count reactions
 	nreact_unbridge = len(atoms_all)
@@ -1523,7 +1543,6 @@ def writeReactBridge(outReactFold, bridgeEnds, backbone_neighbors, complements, 
 		atoms = atoms_all[ri]
 		bonds = bonds_all[ri]
 		edges = edges_all[ri]
-		extra = extra_all[ri]
 		natom = len(atoms)
 		nbond = len(bonds)
 		nedge = len(edges)
@@ -1671,7 +1690,7 @@ def staticSwirl(nbead, amplitude, nperiod, radius, r12_eq, nsubstep):
 		mismatch = np.linalg.norm(r[0]-r[bi]) - r12_eq
 		if bi > 1 and mismatch < 0:
 			if bi < nbead/nperiod:
-				print("Error: Too dense to initiate swirl.")
+				print("Error: Too dense to initiate swirl, try again with larger box.")
 				sys.exit()
 			mismatch += r12_eq*(bi-nbead+1)
 			return r, mismatch
@@ -1764,6 +1783,84 @@ def initPositions(strands, p):
 			### break bead loop if too much failure
 			if nfail_bead == max_nfail_bead:
 				break
+
+		### set position if all went well
+		if nfail_bead < max_nfail_bead:
+			r[rbi] = r_propose
+			nbead_placed += 1
+
+			### update locked strands if end of strand
+			if obi+1 == p.n_ori or strands[obi] < strands[obi+1]:
+
+				### debug output
+				if p.debug:
+					print(f"Placed staple {nstrand_locked} after {nfail_strand} failures.")
+
+				### updates
+				nbead_locked += strands.count(strands[obi])
+				nstrand_locked += 1
+				nfail_strand = 0
+
+		### reset strand if too much failure
+		else:
+			nfail_strand += 1
+			nbead_placed = nbead_locked
+
+			### give up if too many strand failures
+			if nfail_strand == max_nfail_strand:
+				print("Error: could not place beads, try again with larger box.")
+				sys.exit()
+
+	### return positions
+	return r
+
+
+### initialize positions of given staples, keeping strands together
+def randomStapPositions(r, strands, is_reserved_strand, p):
+	print("Randomizing reserved staple positions...")
+
+	### parameters
+	max_nfail_strand = 20
+	max_nfail_bead = 20
+
+	### initializations
+	nbead_placed = p.n_scaf
+	nbead_locked = p.n_scaf
+	nstrand_locked = 1
+
+	### loop over beads
+	nfail_strand = 0
+	while nbead_placed < p.nbead:
+		rbi = nbead_placed
+		obi = rbi2obi(rbi, p)
+		nfail_bead = 0
+
+		### set to current position for regular beads
+		if not is_reserved_strand[strands[obi]]:
+			r_propose = r[rbi]
+
+		### placement loop for reserved beads
+		else:
+			while True:
+
+				### position linked to previous bead
+				if strands[obi] == strands[obi-1]:
+					r_propose = ars.applyPBC(r[rbi-1] + p.r12_eq*ars.unitVector(ars.boxMuller()), p.dbox)
+
+				### random position for new strand
+				else:
+					r_propose = ars.randPos(p.dbox)
+
+				### evaluate position, break loop if no overlap
+				if not ars.checkOverlap(r_propose,r[:rbi],p.sigma,p.dbox):
+					break
+
+				### if loop not broken update bead fail count
+				nfail_bead += 1
+
+				### break bead loop if too much failure
+				if nfail_bead == max_nfail_bead:
+					break
 
 		### set position if all went well
 		if nfail_bead < max_nfail_bead:
