@@ -30,11 +30,11 @@ def main():
 	if useMyFiles:
 
 		### chose design
-		desID = "triSS_edit"		# design identificaiton
-		confTag = "_ideal"			# if using oxdna position, tag for configuration file (None for caDNAno positions)
-		rstapTag = "_baigl"		# if reserving staples, tag for reserved staples file (None for all staples)
-		circularScaf = True			# whether to add bond between scaffold ends
-		cornerView = False			# whether to view the origami at an angle
+		desID = "2HBx4"			# design identificaiton
+		confTag = None			# if using oxdna position, tag for configuration file (None for caDNAno positions)
+		rstapTag = None			# if reserving staples, tag for reserved staples file (None for all staples)
+		circularScaf = True		# whether to add bond between scaffold ends
+		cornerView = False		# whether to view the origami at an angle
 
 		### get input files
 		cadFile = utilsLocal.getCadFile(desID)

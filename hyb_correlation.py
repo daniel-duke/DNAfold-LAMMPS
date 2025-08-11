@@ -211,8 +211,7 @@ def plotCorrHist(first_hyb_times_scaled_allSim, product_quality, strands, comple
 	nstrand = max(strands)
 	hybCorr_strand_rand = np.zeros((nrand,nstrand))
 	for i in range(nrand):
-		rng = np.random.default_rng()
-		rng.shuffle(product_quality)
+		np.random.shuffle(product_quality)
 		hybCorr_strand_rand[i] = calcHybCorr(first_hyb_times_scaled_allSim, product_quality, strands, complements, corr_type)[1]
 	hybCorr_strand_rand = hybCorr_strand_rand.reshape(nrand*nstrand)
 

@@ -90,10 +90,10 @@ def readHybStatus(hybFile, nstep_skip=0, coarse_time=1, nstep_max="all"):
 	print("{:1.2e} steps used".format(nstep_used))
 
 	### read data
-	hyb_status = np.zeros((nstep_used,nbead),dtype=int)
+	hyb_status = np.zeros((nstep_used,nbead))
 	for i in range(nstep_used):
 		for j in range(nbead):
-			hyb_status[i,j] = int(content[(nbead+1)*(nstep_skip+i*coarse_time)+1+j].split()[1])
+			hyb_status[i,j] = content[(nbead+1)*(nstep_skip+i*coarse_time)+1+j].split()[1]
 
 	### results
 	return hyb_status
@@ -272,7 +272,7 @@ def initPositionsCaDNAno(cadFile):
 ### initialize positions according to oxdna configuration file
 def initPositionsOxDNA(cadFile, topFile, confFile):
 	print("Initializing positions from oxDNA...")
-	nnt_per_bead = 8
+	nnt_bead = 8
 
 	### parse caDNAno file
 	strands, complements = buildDNAfoldModel(cadFile)[:2]
@@ -296,21 +296,21 @@ def initPositionsOxDNA(cadFile, topFile, confFile):
 	### get oxDNA scaffold positions
 	r = np.zeros((n_ori,3))
 	for bi in range(n_scaf):
-		bais = [ nba_offset+nba_scaf-bi*nnt_per_bead-j-1 for j in range(nnt_per_bead)]
+		bais = [ nba_offset+nba_scaf-bi*nnt_bead-j-1 for j in range(nnt_bead)]
 		r[bi] = np.mean( ars.applyPBC( coms[bais]+0.6*a1s[bais], dbox3 ), axis=0) *0.8518
 
 	### get oxDNA staple positions
-	n_stap_5p = (nba_total - nba_scaf - nba_offset) // nnt_per_bead
-	n_stap_3p = nba_offset // nnt_per_bead
+	n_stap_5p = (nba_total - nba_scaf - nba_offset) // nnt_bead
+	n_stap_3p = nba_offset // nnt_bead
 	n_stap = n_stap_5p + n_stap_3p
 	r_ox_stap = np.zeros((n_stap,3))
 	strands_ox_stap = np.zeros(n_stap,dtype=int)
 	for bi in range(n_stap_5p):
-		bais = [ nba_total-bi*nnt_per_bead-j-1 for j in range(nnt_per_bead) ]
+		bais = [ nba_total-bi*nnt_bead-j-1 for j in range(nnt_bead) ]
 		r_ox_stap[bi] = np.mean( ars.applyPBC( coms[bais]+0.6*a1s[bais], dbox3 ), axis=0) *0.8518
 		strands_ox_stap[bi] = base_strands[bais[0]]
 	for bi in range(n_stap_3p):
-		bais = [ nba_offset-bi*nnt_per_bead-j-1 for j in range(nnt_per_bead) ]
+		bais = [ nba_offset-bi*nnt_bead-j-1 for j in range(nnt_bead) ]
 		r_ox_stap[bi+n_stap_5p] = np.mean( ars.applyPBC( coms[bais]+0.6*a1s[bais], dbox3 ), axis=0) *0.8518
 		strands_ox_stap[bi+n_stap_5p] = base_strands[bais[0]]
 
@@ -357,9 +357,9 @@ def buildDNAfoldModel(cadFile):
 
 	### initial calculations
 	print("Building DNAfold model...")
-	nnt_per_bead = 8
-	n_scaf = nnt_scaf // nnt_per_bead
-	n_stap = nnt_stap // nnt_per_bead
+	nnt_bead = 8
+	n_scaf = nnt_scaf // nnt_bead
+	n_stap = nnt_stap // nnt_bead
 	n_ori = n_scaf + n_stap
 	print("Using " + str(n_scaf) + " scaffold beads and " + str(n_stap) + " staple beads.")
 
@@ -384,14 +384,14 @@ def buildDNAfoldModel(cadFile):
 	### gather 3D positions
 	row_index[bi_current] = vstrand_rows[vstrand]
 	col_index[bi_current] = vstrand_cols[vstrand]
-	dep_index[bi_current] = scaffold[ni_scaffoldArr][1] // nnt_per_bead
+	dep_index[bi_current] = scaffold[ni_scaffoldArr][1] // nnt_bead
 
 	### error message
 	if scaffold[ni_scaffoldArr][0] % 2 == 0:
-		if scaffold[ni_scaffoldArr][1] % nnt_per_bead != 0:
+		if scaffold[ni_scaffoldArr][1] % nnt_bead != 0:
 			print(f"Error: Scaffold 5' end not located at multiple-of-8 position (vstrand {vstrand}).")
 			sys.exit()
-	elif scaffold[ni_scaffoldArr][1] % nnt_per_bead != 7:
+	elif scaffold[ni_scaffoldArr][1] % nnt_bead != 7:
 		print(f"Error: Scaffold 5' end not located at multiple-of-8 position (vstrand {vstrand}).")
 		sys.exit()
 
@@ -401,19 +401,19 @@ def buildDNAfoldModel(cadFile):
 
 		### update nucleotide and bead indices
 		ni_current += 1
-		bi_current = ni_current // nnt_per_bead
+		bi_current = ni_current // nnt_bead
 		scaffold[ni_scaffoldArr].extend([ni_current, bi_current])
 		vstrand = scaffold[ni_scaffoldArr][0]
 
 		### store vstrand and backbone bonds for new beads
-		if bi_current > (ni_current-1) // nnt_per_bead:
+		if bi_current > (ni_current-1) // nnt_bead:
 			backbone_neighbors[bi_current][0] = bi_current-1
 			backbone_neighbors[bi_current-1][1] = bi_current
 
 			### gather 3D positions
 			row_index[bi_current] = vstrand_rows[vstrand]
 			col_index[bi_current] = vstrand_cols[vstrand]
-			dep_index[bi_current] = scaffold[ni_scaffoldArr][1] // nnt_per_bead
+			dep_index[bi_current] = scaffold[ni_scaffoldArr][1] // nnt_bead
 
 		### error message
 		elif vstrand != vstrand_prev:
@@ -423,10 +423,10 @@ def buildDNAfoldModel(cadFile):
 
 	### error message
 	if scaffold[ni_scaffoldArr][0] % 2 == 0:
-		if scaffold[ni_scaffoldArr][1] % nnt_per_bead != 7:
+		if scaffold[ni_scaffoldArr][1] % nnt_bead != 7:
 			print(f"Error: Scaffold 3' end not located at multiple-of-8 position (vstrand {vstrand}).")
 			sys.exit()
-	elif scaffold[ni_scaffoldArr][1] % nnt_per_bead != 0:
+	elif scaffold[ni_scaffoldArr][1] % nnt_bead != 0:
 		print(f"Error: Scaffold 3' end not located at multiple-of-8 position (vstrand {vstrand}).")
 		sys.exit()
 
@@ -436,7 +436,7 @@ def buildDNAfoldModel(cadFile):
 
 		### new nucleotide and bead incides
 		ni_current += 1
-		bi_current = ni_current // nnt_per_bead
+		bi_current = ni_current // nnt_bead
 
 		### pick up nucleotide and bead indexing with 5' staple end
 		ni_staplesArr = find(fiveP_ends_stap[sti][0], fiveP_ends_stap[sti][1], staples)
@@ -448,7 +448,7 @@ def buildDNAfoldModel(cadFile):
 		### gather 3D positions
 		row_index[bi_current] = vstrand_rows[vstrand]
 		col_index[bi_current] = vstrand_cols[vstrand]
-		dep_index[bi_current] = staples[ni_staplesArr][1] // nnt_per_bead
+		dep_index[bi_current] = staples[ni_staplesArr][1] // nnt_bead
 
 		### identify paired beads
 		if scaffold[ni_staplesArr][2] != -1 or scaffold[ni_staplesArr][4] != -1:
@@ -457,10 +457,10 @@ def buildDNAfoldModel(cadFile):
 
 		### error message
 		if staples[ni_staplesArr][0] % 2 == 0:
-			if staples[ni_staplesArr][1] % nnt_per_bead != 7:
+			if staples[ni_staplesArr][1] % nnt_bead != 7:
 				print(f"Error: Staple 5' end not located at multiple-of-8 position (vstrand {vstrand}).")
 				sys.exit()
-		elif staples[ni_staplesArr][1] % nnt_per_bead != 0:
+		elif staples[ni_staplesArr][1] % nnt_bead != 0:
 			print(f"Error: Staple 5' end not located at multiple-of-8 position (vstrand {vstrand}).")
 			sys.exit()
 
@@ -470,12 +470,12 @@ def buildDNAfoldModel(cadFile):
 
 			### update nucleotide and bead indices
 			ni_current += 1
-			bi_current = ni_current // nnt_per_bead
+			bi_current = ni_current // nnt_bead
 			staples[ni_staplesArr].extend([ni_current, bi_current])
 			vstrand = staples[ni_staplesArr][0]
 
 			### store vstrand, strand, and backbone bonds for new beads
-			if bi_current > (ni_current-1) // nnt_per_bead:
+			if bi_current > (ni_current-1) // nnt_bead:
 				strands[bi_current] = sti+1
 				backbone_neighbors[bi_current][0] = bi_current-1
 				backbone_neighbors[bi_current-1][1] = bi_current
@@ -483,7 +483,7 @@ def buildDNAfoldModel(cadFile):
 				### gather 3D positions
 				row_index[bi_current] = vstrand_rows[vstrand]
 				col_index[bi_current] = vstrand_cols[vstrand]
-				dep_index[bi_current] = staples[ni_staplesArr][1] // nnt_per_bead
+				dep_index[bi_current] = staples[ni_staplesArr][1] // nnt_bead
 
 				### identify paired beads
 				if scaffold[ni_staplesArr][2] != -1 or scaffold[ni_staplesArr][4] != -1:
@@ -498,10 +498,10 @@ def buildDNAfoldModel(cadFile):
 
 		### error message
 		if staples[ni_staplesArr][0] % 2 == 0:
-			if staples[ni_staplesArr][1] % nnt_per_bead != 0:
+			if staples[ni_staplesArr][1] % nnt_bead != 0:
 				print(f"Error: Staple 3' end not located at multiple-of-8 position (vstrand {vstrand}).")
 				sys.exit()
-		elif staples[ni_staplesArr][1] % nnt_per_bead != 7:
+		elif staples[ni_staplesArr][1] % nnt_bead != 7:
 			print(f"Error: Staple 3' end not located at multiple-of-8 position (vstrand {vstrand}).")
 			sys.exit()
 

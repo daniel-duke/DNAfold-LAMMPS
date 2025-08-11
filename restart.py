@@ -28,7 +28,6 @@ def main():
 	parser.add_argument('--simFold',	type=str,	default=None,	help='name of simulation folder, should exist within current directory')
 	parser.add_argument('--rseed',		type=int,	default=1,		help='random seed, used to find simFold if necessary')
 	parser.add_argument('--astapFile',	type=str,	default=None,	help='if adding staples, path to add staple file')
-	parser.add_argument('--parSim',		type=int,	default=False,	help='whether the simulation is parallel (affects geometry interpretation)')
 
 	### parameters
 	r12_eq = 2.72				# if adding staples, equilibrium bead separation
@@ -40,7 +39,6 @@ def main():
 	simFold = args.simFold
 	rseed = args.rseed
 	astapFile = args.astapFile
-	parSim = args.parSim
 
 	### get simulation folders
 	simFolds, nsim = utils.getSimFolds(None, simFold, rseed)
@@ -49,42 +47,34 @@ def main():
 ################################################################################
 ### Heart
 
-	### set random seed
-	random.seed(rseed)
-
 	### loop over simulations
 	for i in range(nsim):
 
 		### edit input file
 		lammpsFile = simFolds[i] + "lammps.in"
-		editInput(lammpsFile, nstep, astapFile)
+		nbondType = editInput(lammpsFile, nstep, astapFile)
 
 		### add staples
 		if astapFile is not None:
 
 			### read geometry file
 			geoFile = simFolds[i] + "restart_geometry.out"
-			r, molecules, types, charges, bonds, angles = ars.readGeo(geoFile)
-			dbox3 = ars.getDbox3(geoFile)
+			r, molecules, types, charges, bonds, angles, extras = ars.readGeo(geoFile, extraLabel="CFs")
+			dbox = ars.getDbox3(geoFile)[0]
+			strands = molecules[:-1]
 
-			### figure out strands
-			if not parSim:
-				strands = molecules
-			else:
-				n_scaf = len(types[types==1])
-				nbead = len(types)-1
-				strands = np.ones(nbead,dtype=int)
-				strands[n_scaf:] = charges[n_scaf:nbead].astype(int)
+			### create random number generator
+			rng = np.random.default_rng(rseed)
 
 			### add staples
 			nstrand = max(strands)
 			is_add_strand = readAstap(astapFile, nstrand)
-			r, types = addStap(r, strands, types, is_add_strand, r12_eq, sigma, dbox3[0])
+			r, types = addStap(r, strands, types, is_add_strand, r12_eq, sigma, dbox, rng)
 			bonds = updateBondTypes(bonds, types)
 
 			### write geometry file
 			outGeoFile = simFolds[i] + "restart_geometry.in"
-			ars.writeGeo(outGeoFile, dbox3, r, molecules, types, bonds, angles, nbondType=3, nangleType=2, charges=charges, precision=16)
+			ars.writeGeo(outGeoFile, dbox, r, molecules, types, bonds, angles, nbondType=nbondType, nangleType=2, charges=charges, extras=extras)
 
 
 ################################################################################
@@ -100,6 +90,7 @@ def editInput(lammpsFile, nstep, astapFile):
 
 	### parse the content and write edited content
 	content_out = []
+	nbondType = 0
 	i = 0
 	while i < len(content_in):
 		content_out.append(content_in[i])
@@ -107,9 +98,16 @@ def editInput(lammpsFile, nstep, astapFile):
 		### set how to read geometry
 		if content_in[i].startswith("## Geometry"):
 
+			### get fix CFs line
+			if "read_restart" in content_in[i+1]:
+				line_fixCFs = content_in[i+2]
+			else:
+				line_fixCFs = content_in[i+1]
+
 			### if adding stales, use geometry
 			if astapFile is not None:
-				content_out.append("read_data       restart_geometry.in &\n")
+				content_out.append(line_fixCFs)
+				content_out.append("read_data       restart_geometry.in fix CFs NULL Extras &\n")
 				content_out.append("                extra/bond/per/atom 10 &\n")
 				content_out.append("                extra/angle/per/atom 10 &\n")
 				content_out.append("                extra/special/per/atom 100\n")
@@ -117,17 +115,18 @@ def editInput(lammpsFile, nstep, astapFile):
 			### otherwise, use binary
 			else:
 				content_out.append("read_restart    restart_binary2.out\n")
+				content_out.append(line_fixCFs)
 				
 			### skip the appropriate number of lines
-			if "read_data" in content_in[i+1]:
-				i += 4
-			elif "read_restart" in content_in[i+1]:
-				i += 1
+			if "read_restart" in content_in[i+1]:
+				i += 2
+			else:
+				i += 5
 
 		### remove scaffold relaxation
 		elif content_in[i].startswith("## Relaxation"):
 			content_out.pop()
-			i += 8
+			i += 10
 
 		### run a single step before dumps
 		elif content_in[i].startswith("## Production"):
@@ -143,12 +142,20 @@ def editInput(lammpsFile, nstep, astapFile):
 			content_out.append(f"run             {int(nstep-1)}\n")
 			i += 1
 
+		### count bond types
+		elif content_in[i].startswith("bond_coeff"):
+			bondType = int(content_in[i].split()[1])
+			nbondType = max(bondType,nbondType)
+
 		### next line
 		i += 1
 
 	### write edited lammps file
 	with open(lammpsFile,'w') as f:
 		f.writelines(content_out)
+
+	### result
+	return nbondType
 
 
 ### read add staple file
@@ -170,7 +177,7 @@ def readAstap(astapFile, nstrand):
 ### Calculation Managers
 
 ### edit positions and types for adding staples
-def addStap(r, strands, types, is_add_strand, r12_eq, sigma, dbox3):
+def addStap(r, strands, types, is_add_strand, r12_eq, sigma, dbox, rng):
 	print("Initializing positions...")
 
 	### parameters
@@ -210,14 +217,14 @@ def addStap(r, strands, types, is_add_strand, r12_eq, sigma, dbox3):
 
 			### position linked to previous bead
 			if strands[bi] == strands[bi-1]:
-				r_propose = ars.applyPBC(r[bi-1] + r12_eq*ars.unitVector(ars.boxMuller()), dbox3)
+				r_propose = ars.applyPBC(r[bi-1] + r12_eq*ars.unitVector(ars.boxMuller(rng)), dbox)
 
 			### random position for new strand
 			else:
-				r_propose = ars.randPos(dbox3)
+				r_propose = ars.randPos(dbox, rng)
 
 			### evaluate position, break loop if no overlap
-			if not ars.checkOverlap(r_propose,r[:bi],sigma,dbox3):
+			if not ars.checkOverlap(r_propose,r[:bi],sigma,dbox):
 				break
 
 			### if loop not broken update bead fail count
@@ -230,8 +237,8 @@ def addStap(r, strands, types, is_add_strand, r12_eq, sigma, dbox3):
 		### set position if all went well
 		if nfail_bead < max_nfail_bead:
 			r[bi] = r_propose
-			types[bi] = 2
 			nbead_placed += 1
+			types[bi] = 2
 
 			### update locked strands if end of strand
 			if bi+1 == nbead or strands[bi] < strands[bi+1]:

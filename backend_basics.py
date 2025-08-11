@@ -42,7 +42,6 @@ def main():
 	parser.add_argument('--nstep_skip',		type=float,	default=0,		help='number of recorded initial steps to skip')
 	parser.add_argument('--nstep_max',		type=float,	default=0,		help='max number of recorded steps to use (0 for all)')
 	parser.add_argument('--coarse_time',	type=int,	default=1,		help='coarse factor for time steps')
-	parser.add_argument('--parSim',			type=int,	default=False,	help='whether the simulation is parallel (affects geometry interpretation)')
 
 	### analysis options
 	center = 1						# what to place at center
@@ -59,7 +58,6 @@ def main():
 	nstep_skip = int(args.nstep_skip)
 	nstep_max = int(args.nstep_max)
 	coarse_time = args.coarse_time
-	parSim = args.parSim
 
 	### interpret input
 	if nstep_max == 0:
@@ -74,7 +72,7 @@ def main():
 
 	### get connectivity vars
 	geoFile = simFolds[0] + "geometry.in"
-	strands, bonds_backbone, complements, n_scaf, nbead, circularScaf = processGeo(geoFile, parSim)
+	strands, bonds_backbone, complements, compFactors, n_scaf, nbead, circularScaf = processGeo(geoFile)
 
 	### write conectivity vars
 	ars.createSafeFold("analysis")
@@ -85,7 +83,7 @@ def main():
 	### assemble data params
 	params = []
 	for i in range(nsim):
-		params.append((simFolds[i], strands, bonds_backbone, complements, nstep_skip, nstep_max, coarse_time, center, unwrap, set_color, bicolor, r12_cut_hyb))
+		params.append((simFolds[i], strands, bonds_backbone, complements, compFactors, nstep_skip, nstep_max, coarse_time, center, unwrap, set_color, bicolor, r12_cut_hyb))
 
 	### run in parallel if multiple simulations
 	if nsim == 1:
@@ -97,10 +95,11 @@ def main():
 
 
 ### body of main function
-def submain(simFold, strands, bonds_backbone, complements, nstep_skip, nstep_max, coarse_time, center, unwrap, set_color, bicolor, r12_cut_hyb):
+def submain(simFold, strands, bonds_backbone, complements, compFactors, nstep_skip, nstep_max, coarse_time, center, unwrap, set_color, bicolor, r12_cut_hyb):
 
 	### input files
 	datFile = simFold + "trajectory.dat"
+	misFile = "misbinding.txt"
 
 	### output files
 	outFold = simFold + "analysis/"
@@ -121,8 +120,19 @@ def submain(simFold, strands, bonds_backbone, complements, nstep_skip, nstep_max
 	writeAtomDump(outDatFile, dbox, points_centered, colors, set_color, dump_every)
 	ars.writeGeo(outGeoVisFile, dbox, points[0], strands, colors, bonds_backbone)
 
+	### read misbinding data
+	misbinding = False
+	if compFactors.shape[1] > 1:
+		if ars.testFileExist(misFile, "misbinding", required=False):
+			misbinding = True
+			mis_d2_cuts, Us_mis = readMisbinding(misFile)
+			n_scaf = sum(strands==1)
+		else:
+			print("Flag: Simulation seems to include misbinding, but no misbinding data file found.")
+
 	### hybridization analysis
-	hyb_status = calcHybStatus(points, complements, dbox, r12_cut_hyb)
+	if misbinding: hyb_status = calcHybStatusMis(points, compFactors, n_scaf, dbox, r12_cut_hyb, mis_d2_cuts, Us_mis)
+	if not misbinding: hyb_status = calcHybStatus(points, complements, dbox, r12_cut_hyb)
 	writeHybStatus(outHybFile, hyb_status, dump_every)
 
 
@@ -130,39 +140,40 @@ def submain(simFold, strands, bonds_backbone, complements, nstep_skip, nstep_max
 ### File Managers
 
 ### extract information from geometry file
-def processGeo(geoFile, parSim):
+def processGeo(geoFile):
 
 	### read file
-	molecules, types, charges, bonds = ars.readGeo(geoFile)[1:5]
-	n_scaf = len(types[types==1])
+	_, molecules, types, _, bonds, _, extras = ars.readGeo(geoFile, extraLabel="Extras")
 
-	### regular simulation
-	if not parSim:
+	### bead numbers and trimming
+	n_scaf = sum(types==1)
+	nbead = len(types)-1
+	strands = molecules[:-1]
+	compFactors = extras[:-1]
 
-		### bead numbers and trimming
-		nbead = len(types)-n_scaf
-		strands = molecules[:nbead]
-
-		### calculate complements
-		complements = getComplements(charges, n_scaf, nbead)
-
-	### parallel simulation
-	else:
-
-		### bead numbers and trimming
-		nbead = len(types)-1
-		strands = np.ones(nbead,dtype=int)
-		strands[n_scaf:] = charges[n_scaf:nbead].astype(int)
-
-		### calculate complements
-		complements = getComplements(molecules, n_scaf, nbead)
+	### calculate complements
+	complements = getComplements(extras, n_scaf, nbead)
 
 	### analyze bonds
 	bonds_backbone = bonds[ (bonds[:,0]!=2) & (bonds[:,1]<=nbead) & (bonds[:,2]<=nbead) ]
 	circularScaf = True if np.sum(bonds_backbone[:,1]<=n_scaf)==n_scaf else False
 
 	### return results
-	return strands, bonds_backbone, complements, n_scaf, nbead, circularScaf
+	return strands, bonds_backbone, complements, compFactors, n_scaf, nbead, circularScaf
+
+
+### extract misbinding info
+def readMisbinding(misFile):
+	with open(misFile, 'r') as f:
+		content = f.readlines()
+	nmisBond = len(content)
+	mis_d2_cuts = np.zeros(nmisBond)
+	Us_mis = np.zeros(nmisBond)
+	for i in range(nmisBond):
+		line = content[i].split()
+		mis_d2_cuts[i] = line[0]
+		Us_mis[i] = line[1]
+	return mis_d2_cuts, Us_mis
 
 
 ### write lammps-style atom dump
@@ -172,7 +183,7 @@ def writeAtomDump(outDatFile, dbox, points, col2s, set_color, dump_every):
 	len_npoint = len(str(npoint))
 	len_ncol2 = len(str(max(col2s)))
 	len_dbox = len(str(int(dbox)))
-	with open(outDatFile,'w') as f:
+	with open(outDatFile, 'w') as f:
 		for i in range(nstep):
 			f.write(f"ITEM: TIMESTEP\n{i*dump_every}\n")
 			f.write(f"ITEM: NUMBER OF ATOMS\n{npoint}\n")
@@ -196,7 +207,7 @@ def writeAtomDump(outDatFile, dbox, points, col2s, set_color, dump_every):
 def writeHybStatus(outHybFile, hyb_status, dump_every):
 	nstep = hyb_status.shape[0]
 	nbead = hyb_status.shape[1]
-	with open(outHybFile,'w') as f:
+	with open(outHybFile, 'w') as f:
 		for i in range(nstep):
 			f.write(f"TIMESTEP {i*dump_every}\n")
 			for j in range(nbead):
@@ -211,11 +222,11 @@ def getComplements(comp_tags, n_scaf, nbead):
 	complements = [[] for i in range(nbead)]
 	for i in range(n_scaf):
 		for j in range(n_scaf,nbead):
-			if comp_tags[i] == comp_tags[j]:
+			if all(comp_tags[i] == comp_tags[j]):
 				complements[i].append(j+1)
 	for i in range(n_scaf,nbead):
 		for j in range(n_scaf):
-			if comp_tags[i] == comp_tags[j]:
+			if all(comp_tags[i] == comp_tags[j]):
 				complements[i].append(j+1)
 	return complements
 
@@ -240,6 +251,37 @@ def calcHybStatus(points, complements, dbox, r12_cut_hyb):
 						sep = np.linalg.norm( ars.applyPBC( points[i,j,:]-points[i,c,:], dbox ) )
 						if sep < r12_cut_hyb:
 							hyb_status[i,j] = 1
+	### result
+	return hyb_status
+
+
+### analyze trajectory to get hybridiazation status of each scaffold bead for each time step
+# 1 for hybridized, decimal for U
+# 0 for unhybridized
+def calcHybStatusMis(points, compFactors, n_scaf, dbox, r12_cut_hyb, mis_d2_cuts, Us_mis):
+	r12_cut_hyb = 2
+	nstep = points.shape[0]
+	nbead = points.shape[1]
+	nmisBond = len(mis_d2_cuts)
+	hyb_status = np.zeros((nstep,nbead))
+	for i in range(nstep):
+		for j in range(n_scaf):
+			if any(points[i,j,:]!=[0,0,0]):
+				for k in range(n_scaf,nbead):
+					if any(points[i,k,:]!=[0,0,0]):
+						sep = np.linalg.norm( ars.applyPBC( points[i,j,:]-points[i,k,:], dbox ) )
+						if sep < r12_cut_hyb:
+							d2 = sum((compFactors[j]-compFactors[k])**2)
+							if d2 == 0:
+								hyb_status[i,j] = 1
+								hyb_status[i,k] = 1
+							elif d2 < mis_d2_cuts[-1]:
+								for m in range(nmisBond):
+									if d2 < mis_d2_cuts[m]:
+										hyb_status[i,j] = 1 + (m+1)/100
+										hyb_status[i,k] = 1 + (m+1)/100
+										break
+
 	### result
 	return hyb_status
 

@@ -2,13 +2,12 @@ import armament as ars
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.special import gammaln
-import random
 import shutil
 import os
 import sys
 
 ### read lammps-style trajectory
-def readAtomDump(datFile, nstep_skip=0, coarse_time=1, bdis="all", coarse_points=1, nstep_max="all"):
+def readAtomDump(datFile, nstep_skip=0, coarse_time=1, bdis='all', coarse_points=1, nstep_max='all'):
 
 	### notes
 	# assumes the bdis array stores the atom indices starting from 1.
@@ -33,7 +32,7 @@ def readAtomDump(datFile, nstep_skip=0, coarse_time=1, bdis="all", coarse_points
 		sys.exit()
 
 	### interpret input
-	if isinstance(nstep_max, str) and nstep_max == "all":
+	if isinstance(nstep_max, str) and nstep_max == 'all':
 		nstep_used = nstep_trimmed
 	elif isinstance(nstep_max, int):
 		nstep_used = min([nstep_max,nstep_trimmed])
@@ -47,7 +46,7 @@ def readAtomDump(datFile, nstep_skip=0, coarse_time=1, bdis="all", coarse_points
 	print("{:1.2e} steps used".format(nstep_used))
 
 	### interpret input
-	if isinstance(bdis, str) and bdis == "all":
+	if isinstance(bdis, str) and bdis == 'all':
 		bdis = [list( range(1, int(np.ceil(nbd_total/coarse_points))+1) )]
 	elif isinstance(bdis, int):
 		bdis = [[bdis]]
@@ -127,7 +126,10 @@ def getDumpEvery(datFile):
 
 
 ### read lammps-style geometry
-def readGeo(geoFile):
+def readGeo(geoFile, **kwargs):
+
+	### keyword arguments
+	extraLabel = None if 'extraLabel' not in kwargs else kwargs['extraLabel']
 
 	### notes
 	# all indices are stored directly as they appear in the geometry file; in
@@ -167,7 +169,7 @@ def readGeo(geoFile):
 	molecules = np.zeros(natom, dtype=int)
 	types = np.zeros(natom, dtype=int)
 	charges = np.zeros(natom)
-	is_charged = False
+	readCharge = False
 	if natom:
 		for i in range(len(content)):
 			if len(content[i].split()) > 0 and content[i].split()[0] == 'Atoms':
@@ -189,7 +191,7 @@ def readGeo(geoFile):
 			### assume full atom style
 			elif len(line) == 7 or len(line) == 10:
 				if i == 0:
-					is_charged = True
+					readCharge = True
 				charges[ai] = line[3]
 				r[ai] = line[4:7]
 
@@ -225,11 +227,35 @@ def readGeo(geoFile):
 			angles[i,3] = content[line_index].split()[4]
 			line_index += 1
 
+
+	### get bond information
+	if extraLabel != None:
+		for i in range(len(content)):
+			if len(content[i].split()) > 0 and content[i].split()[0] == extraLabel:
+				line_index = i+2
+				break
+
+		nextra = len(content[line_index].split())-1
+		extras = np.zeros((natom,nextra))
+		for i in range(natom):
+			line = content[line_index].split()
+			line_index += 1
+
+			ai = int(line[0])-1
+			for j in range(nextra):
+				extras[ai,j] = line[j+1]
+
 	### results
-	if not is_charged:
-		return r, molecules, types, bonds, angles
+	if not readCharge:
+		if extraLabel == None:
+			return r, molecules, types, bonds, angles
+		else:
+			return r, molecules, types, bonds, angles, extras
 	else:
-		return r, molecules, types, charges, bonds, angles
+		if extraLabel == None:
+			return r, molecules, types, charges, bonds, angles
+		else:
+			return r, molecules, types, charges, bonds, angles, extras
 
 
 ### read 3D box diameter from geometry file
@@ -283,13 +309,23 @@ def readCopies(copiesFile):
 
 
 ### write lammps-style geometry
-def writeGeo(geoFile, dbox3, r, molecules="auto", types="auto", bonds="none", angles="none", natomType="auto", nbondType="auto", nangleType="auto", masses="auto", charges="none", precision=2):
+def writeGeo(geoFile, dbox3, r, molecules='auto', types='auto', bonds=None, angles=None, **kwargs):
+
+	### added keyword args
+	natomType	= 'auto'	if 'natomType' not in kwargs else kwargs['natomType']
+	nbondType	= 'auto'	if 'nbondType' not in kwargs else kwargs['nbondType']
+	nangleType	= 'auto'	if 'nangleType' not in kwargs else kwargs['nangleType']
+	masses		= 'auto'	if 'masses' not in kwargs else kwargs['masses']
+	charges		= None		if 'charges' not in kwargs else kwargs['charges']
+	extras		= None		if 'extras' not in kwargs else kwargs['extras']
+	x_precision	= 2			if 'x_precision' not in kwargs else kwargs['x_precision']
+	q_precision	= 4			if 'q_precision' not in kwargs else kwargs['q_precision']
+	e_precision	= 4			if 'e_precision' not in kwargs else kwargs['e_precision']
 
 	### notes
 	# by convention, molecule/type/bond/angle indexing starts at 1, however, there is
 	  # nothing in this function that requires this to be the case (it will print the
 	  # values it is given).
-	# assumes four decimal points is sufficiently precise for setting charge.
 
 	### count atoms
 	natom = len(r)
@@ -300,25 +336,35 @@ def writeGeo(geoFile, dbox3, r, molecules="auto", types="auto", bonds="none", an
 	elif not ars.isarray(dbox3) or len(dbox3) != 3:
 		print("Flag: Not writing geometry file - dbox3 must be number or 3-element list.")
 		return
-	if isinstance(molecules, str) and molecules == "auto":
+	if isinstance(molecules, str) and molecules == 'auto':
 		molecules = np.zeros(natom, dtype=int)
-	if isinstance(types, str) and types == "auto":
+	if isinstance(types, str) and types == 'auto':
 		types = np.ones(natom, dtype=int)
-	if isinstance(bonds, str) and bonds == "none":
+	if bonds is None:
 		bonds = np.zeros((0,3), dtype=int)
-	if isinstance(angles, str) and angles == "none":
+	if angles is None:
 		angles = np.zeros((0,4), dtype=int)
 
 	### inerpret charges
-	if isinstance(charges, str) and charges == "none":
-		is_charged = False
-	elif isinstance(charges, str) and charges == "auto":
-		is_charged = True
+	if charges is None:
+		includeCharge = False
+	elif isinstance(charges, str) and charges == 'auto':
+		includeCharge = True
 		charges = np.zeros(natom, dtype=int)
 		len_charge = 1
 	else:
-		is_charged = True
+		includeCharge = True
 		len_charge = len(str(int(max(charges))))
+
+	### inerpret extras
+	if extras is None:
+		includeExtra = False
+	else:
+		includeExtra = True
+		nextra = extras.shape[1]
+		len_extra = [None]*nextra
+		for i in range(nextra):
+			len_extra[i] = len(str(int(max(extras[:,i]))))
 
 	### count objects
 	nmolecule = int(max(molecules))
@@ -326,19 +372,19 @@ def writeGeo(geoFile, dbox3, r, molecules="auto", types="auto", bonds="none", an
 	nangle = len(angles)
 
 	### some more input interpretation
-	if isinstance(natomType, str) and natomType == "auto":
+	if isinstance(natomType, str) and natomType == 'auto':
 		natomType = int(max(types))
-	if isinstance(nbondType, str) and nbondType == "auto":
+	if isinstance(nbondType, str) and nbondType == 'auto':
 		if nbond > 0:
 			nbondType = int(max(bonds[:,0]))
 		else:
 			nbondType = 0
-	if isinstance(nangleType, str) and nangleType == "auto":
+	if isinstance(nangleType, str) and nangleType == 'auto':
 		if nangle > 0:
 			nangleType = int(max(angles[:,0]))
 		else:
 			nangleType = 0
-	if isinstance(masses, str) and masses == "auto":
+	if isinstance(masses, str) and masses == 'auto':
 		masses = np.ones(natomType, dtype=int)
 
 	### count digits
@@ -362,81 +408,122 @@ def writeGeo(geoFile, dbox3, r, molecules="auto", types="auto", bonds="none", an
 			f.write(f"\t{nbond:<{len_nobject}} bonds\n")
 		if nangle:
 			f.write(f"\t{nangle:<{len_nobject}} angles\n")
-		f.write("\n")
 
-		f.write("## Number of Object Types\n")
+		f.write("\n## Number of Object Types\n")
 		f.write(f"\t{natomType:<{len_nobjectType}} atom types\n")
 		if nbondType:
 			f.write(f"\t{nbondType:<{len_nobjectType}} bond types\n")
 		if nangleType:
 			f.write(f"\t{nangleType:<{len_nobjectType}} angle types\n")
-		f.write("\n")
 
-		f.write("## Simulation Box\n")
-		f.write(f"\t{-dbox3[0]/2:>{len_dbox3+precision+2}.{precision}f} {dbox3[0]/2:>{len_dbox3+precision+1}.{precision}f} xlo xhi\n")
-		f.write(f"\t{-dbox3[1]/2:>{len_dbox3+precision+2}.{precision}f} {dbox3[1]/2:>{len_dbox3+precision+1}.{precision}f} ylo yhi\n")
-		f.write(f"\t{-dbox3[2]/2:>{len_dbox3+precision+2}.{precision}f} {dbox3[2]/2:>{len_dbox3+precision+1}.{precision}f} zlo zhi\n\n")
+		f.write("\n## Simulation Box\n")
+		f.write(f"\t{-dbox3[0]/2:>{len_dbox3+x_precision+2}.{x_precision}f} {dbox3[0]/2:>{len_dbox3+x_precision+1}.{x_precision}f} xlo xhi\n")
+		f.write(f"\t{-dbox3[1]/2:>{len_dbox3+x_precision+2}.{x_precision}f} {dbox3[1]/2:>{len_dbox3+x_precision+1}.{x_precision}f} ylo yhi\n")
+		f.write(f"\t{-dbox3[2]/2:>{len_dbox3+x_precision+2}.{x_precision}f} {dbox3[2]/2:>{len_dbox3+x_precision+1}.{x_precision}f} zlo zhi\n")
 
-		f.write("Masses\n\n")
+		f.write("\nMasses\n\n")
 		for i in range(natomType):
 			f.write(f"\t{i+1:<{len_natomType}} {masses[i]}\n")
-		f.write("\n")
 
-		f.write("Atoms\n\n")
+		f.write("\nAtoms\n\n")
 		for i in range(natom):
-			f.write(f"\t{i+1:<{len_natom}} " + \
-					f"{int(molecules[i]):<{len_nmolecule}} " + \
-					f"{int(types[i]):<{len_natomType}} ")
-			if is_charged:
-				f.write(f"{charges[i]:>{len_charge+6}.4f}  ") 
-			f.write(f"{r[i,0]:>{len_dbox3+precision+2}.{precision}f} " + \
-					f"{r[i,1]:>{len_dbox3+precision+2}.{precision}f} " + \
-					f"{r[i,2]:>{len_dbox3+precision+2}.{precision}f}\n")
-		f.write("\n")
+			f.write(f"\t{i+1:<{len_natom}}" + \
+					f" {int(molecules[i]):<{len_nmolecule}}" + \
+					f" {int(types[i]):<{len_natomType}}")
+			if includeCharge:
+				f.write(f" {charges[i]:>{len_charge+q_precision+1}.{q_precision}f}") 
+			f.write(f"  {r[i,0]:>{len_dbox3+x_precision+2}.{x_precision}f}" + \
+					 f" {r[i,1]:>{len_dbox3+x_precision+2}.{x_precision}f}" + \
+					 f" {r[i,2]:>{len_dbox3+x_precision+2}.{x_precision}f}\n")
 
 		if nbond:
-			f.write("Bonds\n\n")
+			f.write("\nBonds\n\n")
 			for i in range(nbond):
 				f.write(f"\t{i+1:<{len_nbond}} " + \
 						f"{int(bonds[i,0]):<{len_nbondType}}  " + \
 						f"{int(bonds[i,1]):<{len_natom}} " + \
 						f"{int(bonds[i,2]):<{len_natom}}\n")
-			f.write("\n")
 
 		if nangle:
-			f.write("Angles\n\n")
+			f.write("\nAngles\n\n")
 			for i in range(nangle):
 				f.write(f"\t{i+1:<{len_nangle}} " + \
 						f"{int(angles[i,0]):<{len_nangleType}}  " + \
 						f"{int(angles[i,1]):<{len_natom}} " + \
 						f"{int(angles[i,2]):<{len_natom}} " + \
 						f"{int(angles[i,3]):<{len_natom}}\n")
-			f.write("\n")
+
+		if includeExtra:
+			f.write("\nExtras\n\n")
+			for i in range(natom):
+				f.write(f"\t{i+1:<{len_natom}}")
+				for j in range(nextra):
+					f.write(f" {extras[i][j]:>{len_extra[j]+e_precision+1}.{e_precision}f}")
+				f.write("\n")
 
 
 ### set pretty matplotlib defaults
 def magicPlot(pubReady=False):
+
+	### set default magic settings
+	params = {
+		'figure.figsize'	: '8,6',
+		'font.family'		: 'Times',
+		'text.usetex'		: True,
+		'errorbar.capsize'	: 3,
+		'lines.markersize'	: 6,
+		'legend.fontsize'	: 14,
+		'xtick.labelsize'	: 14,
+		'ytick.labelsize'	: 14,
+		'axes.labelsize'	: 14,
+		'axes.titlesize'	: 16
+	}
+	plt.rcParams.update(params)
+
+	### set default magic settings
+	paramsPub = {
+		'figure.figsize'	: '8,6',
+		'font.family'		: 'Times',
+		'text.usetex'		: True,
+		'errorbar.capsize'	: 3,
+		'lines.markersize'	: 6,
+		'legend.fontsize'	: 20,
+		'xtick.labelsize'	: 20,
+		'ytick.labelsize'	: 20,
+		'axes.labelsize'	: 20,
+		'axes.titlesize'	: 24
+	}
+
 	if not pubReady:
-		plt.style.use("/Users/dduke/Files/analysis/arsenal/magic.mplstyle")
+		plt.rcParams.update(params)
 	else:
-		plt.style.use("/Users/dduke/Files/analysis/arsenal/magicPub.mplstyle")
+		plt.rcParams.update(paramsPub)
 
 
 ### plot a nice histogram
-def plotHist(A, Alabel="none", title="none", figLabel="Hist", nbin="auto", Alim_bin="auto", Alim_plot="auto", Ylabel="auto", plotAsLine=False):
+def plotHist(A, Alabel=None, title=None, figLabel="Hist", nbin='auto', Alim_bin='auto', Alim_plot='auto', Ylabel='auto', useDensity=False, **kwargs):
+
+	### added keyword args
+	weights			= None		if 'weights' not in kwargs else kwargs['weights']
+	plotAsLine		= False		if 'plotAsLine' not in kwargs else kwargs['plotAsLine']
+	plotAvgLine		= False		if 'plotAvgLine' not in kwargs else kwargs['plotAvgLine']
+	alpha			= 0.6		if 'alpha' not in kwargs else kwargs['alpha']
+
+	### notes
+	# if plotting multiple histograms in the same plot, be careful with plotAvgLine (the legend might be wonky)
 
 	### interpret input
-	if isinstance(nbin, str) and nbin == "auto":
+	if isinstance(nbin, str) and nbin == 'auto':
 		nbin = ars.optbins(A, 50)
 	elif not isinstance(nbin, int):
 		print("Flag: Skipping histogram plot - number of histogram bins must be either \"auto\" or integer.")
 		return
-	if isinstance(Alim_bin, str) and Alim_bin == "auto":
+	if isinstance(Alim_bin, str) and Alim_bin == 'auto':
 		Alim_bin = [ min(A), max(A) ]
 	elif not ars.isarray(Alim_bin) or len(Alim_bin) != 2:
 		print("Flag: Skipping histogram plot - variable limits must be either \"auto\" or 2-element list.")
 		return
-	if isinstance(Alim_plot, str) and Alim_plot == "auto":
+	if isinstance(Alim_plot, str) and Alim_plot == 'auto':
 		dAbin = (Alim_bin[1]-Alim_bin[0])/nbin
 		Alim_plot = [ Alim_bin[0]-dAbin/2, Alim_bin[1]+dAbin/2 ]
 	elif not ars.isarray(Alim_plot) or len(Alim_plot) != 2:
@@ -444,22 +531,29 @@ def plotHist(A, Alabel="none", title="none", figLabel="Hist", nbin="auto", Alim_
 		return
 
 	### plot histogram
-	plt.figure(figLabel, figsize=(8,6))
+	plt.figure(figLabel)
 	if plotAsLine == False:
-		plt.hist(A, nbin, range=Alim_bin, density=True, alpha=0.6, edgecolor='black')
+		plt.hist(A, nbin, weights=weights, range=Alim_bin, density=useDensity, alpha=alpha, edgecolor='black')
 	else:
-		heights, edges = np.histogram(A, nbin, range=Alim_bin, density=True)
+		heights, edges = np.histogram(A, nbin, weights=weights, range=Alim_bin, useDensity=True)
 		edges = edges[:len(edges)-1] + 1/2*(edges[1]-edges[0])
 		plt.plot(edges, heights, color='black')
+	if plotAvgLine:
+		plt.axvline(np.mean(A), color='red', linestyle='--', label=f"Avg = {np.mean(A):0.2f}")
 	plt.xlim(Alim_plot)
-	if Alabel != "none":
+	if Alabel is not None:
 		plt.xlabel(Alabel)
-	if Ylabel == "auto":
-		plt.ylabel("Density")
-	elif Ylabel != "none":
+	if Ylabel == 'auto':
+		if useDensity:
+			plt.ylabel("Density")
+		else:
+			plt.ylabel("Count")
+	elif Ylabel is not None:
 		plt.ylabel(Ylabel)
-	if title != "none":
+	if title is not None:
 		plt.title(title)
+	if plotAvgLine:
+		plt.legend()
 
 
 ### shift trajectory, placing the given point at the center, optionally unwrapping molecules at boundary
@@ -534,6 +628,42 @@ def centerPointsMolecule(points, molecules, dboxs, center=1, unwrap=True):
 	return points_centered
 
 
+### calculate center of mass, excluding dummy particles (any particle exactly at origin)
+def calcCOMnoDummy(r, dbox):
+	r_trim = np.zeros((0,3))
+	for i in range(len(r)):
+		if any(r[i]!=[0,0,0]):
+			r_trim = np.append(r_trim, [r[i]], axis=0)
+	if len(r_trim) == 0:
+		return np.zeros(3)
+	else:
+		com = ars.calcCOM(r_trim, dbox)
+		return com 
+
+
+### calculate center of mass, using method from Bai and Breen 2008
+def calcCOM(r, dbox):
+	xi_bar = np.mean( np.cos(2*np.pi*(r/dbox+1/2)), axis=0 )
+	zeta_bar = np.mean( np.sin(2*np.pi*(r/dbox+1/2)), axis=0 )
+	theta_bar = np.arctan2(-zeta_bar, -xi_bar) + np.pi
+	r_ref = dbox*(theta_bar/(2*np.pi)-1/2)
+	com = r_ref + np.mean( ars.applyPBC(r-r_ref, dbox), axis=0 )
+	return com
+
+
+### calculate optimum number of histogram bins
+def optbins(A, maxM):
+	N = len(A)
+	logp = np.zeros(maxM)
+	for M in range(1, maxM+1):
+		n = np.histogram(A,bins=M)[0]
+		part1 = N*np.log(M) + gammaln(M/2) - gammaln(N+M/2)
+		part2 = -M*gammaln(1/2) + np.sum(gammaln(n+1/2))
+		logp[M-1] = part1 + part2
+	optM = np.argmax(logp) + 1
+	return optM
+
+
 ### calculate sem assuming independent measurements
 def calcSEM(A):
 	return np.std(A) / np.sqrt(len(A))
@@ -545,10 +675,10 @@ def checkOverlap(r0, r_other, sigma, dbox):
 
 
 ### align positions with principal components
-def alignPC(r, indices="auto"):
+def alignPC(r, indices='auto'):
 
 	### interpret input
-	if isinstance(indices, str) and indices == "auto":
+	if isinstance(indices, str) and indices == 'auto':
 		indices = np.arange(len(r))
 
 	### calculate principal components
@@ -578,42 +708,42 @@ def unitVector(vector):
 	return vector / np.linalg.norm(vector)
 
 
-# arrays (both 1D and 2D) must be numpy arrays
+### apply periodic boundary condition
 def applyPBC(r, dbox):
+
+	### notes
+	# handles single values, single points, or arrays of points
+	# arrays (both 1D and 2D) must be numpy arrays
+
 	return r - dbox*np.round(r/dbox)
 
 
 ### vector with random orientation and (on average) unit magnitude
-def boxMuller():
-	x = np.zeros(3)
-	x[0] = np.sqrt(-2 * np.log(random.uniform(0,1))) * np.cos(2 * np.pi * random.uniform(0,1))
-	x[1] = np.sqrt(-2 * np.log(random.uniform(0,1))) * np.cos(2 * np.pi * random.uniform(0,1))
-	x[2] = np.sqrt(-2 * np.log(random.uniform(0,1))) * np.cos(2 * np.pi * random.uniform(0,1))
-	return x
+def boxMuller(rng=np.random):
+	return np.sqrt(-2 * np.log(rng.uniform(size=3))) * np.cos(2 * np.pi * rng.uniform(size=3))
 
 
 ### vector randomly placed within box
-def randPos(dbox3):
+def randPos(dbox3, rng=np.random):
 	if ars.isnumber(dbox3):
 		dbox3 = [dbox3,dbox3,dbox3]
 	x = np.zeros(3)
-	x[0] = random.uniform(-dbox3[0]/2, dbox3[0]/2)
-	x[1] = random.uniform(-dbox3[1]/2, dbox3[1]/2)
-	x[2] = random.uniform(-dbox3[2]/2, dbox3[2]/2)
+	for i in range(3):
+		x[i] = rng.uniform(-dbox3[i]/2, dbox3[i]/2)
 	return x
 
 
 ### get common nice colors
 def getColor(color):
-	if color == "teal":
+	if color == 'teal':
 		return np.array([0,145,147])
-	elif color == "orchid":
+	elif color == 'orchid':
 		return np.array([122,129,255])
-	elif color == "silver":
+	elif color == 'silver':
 		return np.array([214,241,241])
-	elif color == "purple":
+	elif color == 'purple':
 		return np.array([68,1,84])
-	elif color == "grey":
+	elif color == 'grey':
 		return np.array([153,153,153])
 	else:
 		print("Error: Unknown color.")
@@ -638,13 +768,15 @@ def sortPointsByMolecule(points, molecules):
 
 ### test if files exist
 def testFileExist(file, name="the", required=True):
-	if os.path.isfile(file) == False:
+	if os.path.isfile(file):
+		return True
+	else:
 		if required:
-			print("Error: Could not find " + name + " file:")
+			print(f"Error: Could not find {name} file:")
 			print(file + "\n")
 			sys.exit()
 		else:
-			print("Flag: Could not find " + name + " file.")
+			print(f"Flag: Could not find {name} file.")
 			return False
 
 
@@ -669,32 +801,6 @@ def isnumber(x):
 		return False
 
 
-### calculate center of mass, excluding dummy particles
-def calcCOMnoDummy(r, dbox):
-	r_trim = np.zeros((0,3))
-	for i in range(len(r)):
-		if any(r[i]!=[0,0,0]):
-			r_trim = np.append(r_trim, [r[i]], axis=0)
-	if len(r_trim) == 0:
-		return np.zeros(3)
-	else:
-		com = ars.calcCOM(r_trim, dbox)
-		return com 
-
-
-### calculate optimum number of histogram bins
-def optbins(A, maxM):
-	N = len(A)
-	logp = np.zeros(maxM)
-	for M in range(1, maxM+1):
-		n = np.histogram(A,bins=M)[0]
-		part1 = N*np.log(M) + gammaln(M/2) - gammaln(N+M/2)
-		part2 = -M*gammaln(1/2) + np.sum(gammaln(n+1/2))
-		logp[M-1] = part1 + part2
-	optM = np.argmax(logp) + 1
-	return optM
-
-
 ### check if variable is an array (both list and numpy array work)
 def isarray(x):
 	if isinstance(x, list):
@@ -703,15 +809,5 @@ def isarray(x):
 		return True
 	else:
 		return False
-
-
-### calculate center of mass, using method from Bai and Breen 2008
-def calcCOM(r, dbox):
-	xi_bar = np.mean( np.cos(2*np.pi*(r/dbox+1/2)), axis=0 )
-	zeta_bar = np.mean( np.sin(2*np.pi*(r/dbox+1/2)), axis=0 )
-	theta_bar = np.arctan2(-zeta_bar, -xi_bar) + np.pi
-	r_ref = dbox*(theta_bar/(2*np.pi)-1/2)
-	com = r_ref + np.mean( ars.applyPBC(r-r_ref, dbox), axis=0 )
-	return com
 
 

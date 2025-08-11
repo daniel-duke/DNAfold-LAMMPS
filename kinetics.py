@@ -72,6 +72,7 @@ def main():
 	if saveFig: plt.savefig("analysis/kinetics.pdf")
 	plotNhyb(hyb_status_allSim, n_scaf, dump_every)
 	if saveFig: plt.savefig("analysis/n_hyb.pdf")
+	plotNmis(hyb_status_allSim, n_scaf, dump_every)
 	if not saveFig: plt.show()
 
 
@@ -93,7 +94,7 @@ def plotKinetics(hyb_status_allSim, strands, n_scaf, dump_every):
 		stap_freedom = np.ones((nstap,nsim),dtype=int)
 		for j in range(n_scaf,nbead):
 			for k in range(nsim):
-				if hyb_status_allSim[k,i,j] == 1:
+				if int(hyb_status_allSim[k,i,j]) == 1:
 					stap_freedom[strands[j]-2,k] = 0
 		conc_indiv = np.mean(stap_freedom,axis=1)
 		conc_avg[i] = max(np.mean(conc_indiv), conc_min)
@@ -130,7 +131,7 @@ def plotNhyb(hyb_status_allSim, n_scaf, dump_every):
 	n_hyb_avg = np.zeros(nstep)
 	n_hyb_sem = np.zeros(nstep)
 	for i in range(nstep):
-		n_hyb_indiv = np.sum(hyb_status_allSim[:,i,:n_scaf]==1,axis=1)
+		n_hyb_indiv = np.sum(np.floor(hyb_status_allSim[:,i,:n_scaf])==1,axis=1)
 		n_hyb_avg[i] = np.mean(n_hyb_indiv)
 		n_hyb_sem[i] = ars.calcSEM(n_hyb_indiv)
 
@@ -150,6 +151,41 @@ def plotNhyb(hyb_status_allSim, n_scaf, dump_every):
 	plt.ylim(-n_scaf*0.05,n_scaf*1.05)
 	plt.title("Number of Scaffold Hybridizations")
 	plt.legend(['Mean','SEM','N\\textsubscript{scaffold}'])
+
+
+### plot number of hybridizations
+def plotNmis(hyb_status_allSim, n_scaf, dump_every):
+
+	### get number of misbinding levels
+	nmisBond = int((np.max(hyb_status_allSim[:,:,:n_scaf])-1)*100)
+
+	### calculate free staple concentrations
+	nsim = hyb_status_allSim.shape[0]
+	nstep = hyb_status_allSim.shape[1]
+	n_hyb_avg = np.zeros((nmisBond,nstep))
+	n_hyb_sem = np.zeros((nmisBond,nstep))
+	for m in range(nmisBond):
+		for i in range(nstep):
+			hyb_val = 1+(m+1)/100
+			n_hyb_indiv = np.sum(hyb_status_allSim[:,i,:n_scaf]==hyb_val,axis=1)
+			n_hyb_avg[m,i] = np.mean(n_hyb_indiv)
+			n_hyb_sem[m,i] = ars.calcSEM(n_hyb_indiv)
+
+	### calculate time
+	dt = 0.01
+	scale = 5200
+	time = np.arange(nstep)*dump_every*dt*scale*1E-9
+
+	### plot
+	ars.magicPlot()
+	plt.figure("Mis",figsize=(8,6))
+	for m in range(nmisBond):
+		plt.plot(time,n_hyb_avg[m], label=f'Level {m+1}')
+		plt.fill_between(time,n_hyb_avg[m]-n_hyb_sem[m],n_hyb_avg[m]+n_hyb_sem[m],alpha=0.3)
+	plt.xlabel("Time [s]")
+	plt.ylabel("N\\textsubscript{hyb}")
+	plt.title("Number of Scaffold Misbonds")
+	plt.legend()
 
 
 ### run the script
