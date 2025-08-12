@@ -55,21 +55,21 @@ def main():
 	if useMyFiles:
 
 		### chose design
-		desID = "triS_edit"			# design identification
+		desID = "bridge"			# design identification
 		simTag = ""					# added to desID to get name of simulation folder
-		simType = "production"		# where create simulation folder
-		rstapTag = "_baigl"			# tag for reserved staples file (None for not reserving staples)
-		confTag = "_ideal"			# if starting bound, tag for oxDNA configuration file (None for caDNAno positions)
-		rseed = 1					# random seed for positions and LAMMPS (also used for naming simulation folder)
+		simType = "experiment"		# where create simulation folder
+		rstapTag = None				# tag for reserved staples file (None for not reserving staples)
+		confTag = None				# if starting bound, tag for oxDNA configuration file (None for caDNAno positions)
+		rseed = 2					# random seed for positions and LAMMPS (also used for naming simulation folder)
 		rseed_mis = 1				# random seed for misbinding
 
 		### choose parameters
-		nstep			= 1E9		# steps		- number of simulation steps
-		nstep_relax		= 4E4		# steps		- number of steps for relaxation
+		nstep			= 1E6		# steps		- number of simulation steps
+		nstep_relax		= 1E5		# steps		- number of steps for relaxation
 		dump_every		= 1E4		# steps		- number of steps between positions dumps
-		dbox			= 100		# nm		- periodic boundary diameter
+		dbox			= 20		# nm		- periodic boundary diameter
 		stap_copies		= 1 		# int		- number of copies for each staples
-		circularScaf	= True		# bool		- whether the scaffold is circular
+		circularScaf	= False		# bool		- whether the scaffold is circular
 		forceBind		= False		# bool		- whether to force hybridization
 		startBound		= True		# bool		- whether to start at caDNAno positions
 		nmisBond		= 0			# int		- number of misbinding levels (0 for no misbinding)
@@ -142,14 +142,14 @@ def main():
 	writeMisbinding(outMisFile, mis_d2_cuts, p)
 
 	### write react files
-	nreact_hybBond = writeReactHybBond(outReactFold, mis_d2_cuts, p)
-	nreact_misBond = writeReactMisBond(outReactFold, mis_d2_cuts, p)
+	nreact_bondHyb = writeReactHybBond(outReactFold, mis_d2_cuts, p)
+	nreact_bondMis = writeReactMisBond(outReactFold, mis_d2_cuts, p)
 	bridgeEnds, nreact_unbridge = writeReactBridge(outReactFold, backbone_neighbors, complements, is_crossover, p)
 	nreact_angleAct = writeReactAngleAct(outReactFold, backbone_neighbors, complements, is_crossover, p)
 	nreact_angleDeact = writeReactAngleDeact(outReactFold, bridgeEnds, backbone_neighbors, complements, is_crossover, p)
 
 	### write lammps input file
-	writeInput(outSimFold, nhyb, nangle, nreact_hybBond, nreact_misBond, nreact_angleAct, nreact_angleDeact, bridgeEnds, nreact_unbridge, p)
+	writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_angleAct, nreact_angleDeact, bridgeEnds, nreact_unbridge, p)
 
 
 ################################################################################
@@ -184,8 +184,8 @@ def readInput(inFile=None, rseed=1, rseed_mis=1, cadFile=None, rstapFile=None, o
 		'ncompFactor':		2,				# int			- number of complementary factors (set to 1 if no misbinding)
 		'optCompFactors': 	False,			# bool			- whether to optimize complementary factors for misbinding
 		'optCompEfunc': 	False,			# bool			- whether to optimize energy function for misbinding
-		'dehyb': 			True,			# bool			- whether to include dehybridization reactions
-		'debug': 			False,			# bool			- whether to include debugging output
+		'dehyb': 			False,			# bool			- whether to include dehybridization reactions
+		'debug': 			True,			# bool			- whether to include debugging output
 		'T':				300,			# K				- temperature
 		'T_relax':			600,			# K				- temperature for relaxation
 		'r_h_bead':			1.28,			# nm			- hydrodynamic radius of single bead
@@ -307,6 +307,10 @@ def readInput(inFile=None, rseed=1, rseed_mis=1, cadFile=None, rstapFile=None, o
 	if params['nmisBond'] == 0:
 		params['ncompFactor'] = 1
 
+	### edit default if starting bound
+	if params['startBound'] == True:
+		params['T_relax'] = 300
+
 	### add parameters not set though input file
 	params['rseed'] = rseed
 	params['rseed_mis'] = rseed_mis
@@ -423,12 +427,13 @@ def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossove
 				nangle += 1
 				if p.startBound or p.forceBind:
 					if not is_reserved_strand[strands[complements[bi_5p]]] and not is_reserved_strand[strands[complements[bi]]] and not is_reserved_strand[strands[complements[bi_3p]]]:
-						type = is_crossover[bi] + 1
-						atom1 = bi_5p + 1
-						atom2 = bi + 1
-						atom3 = bi_3p + 1
-						angles = np.append(angles,[[type,atom1,atom2,atom3]],axis=0)
-						charges[bi] = type + 2
+						if p.circularScaf or (bi != 0 and bi != p.n_scaf-1):
+							type = is_crossover[bi] + 1
+							atom1 = bi_5p + 1
+							atom2 = bi + 1
+							atom3 = bi_3p + 1
+							angles = np.append(angles,[[type,atom1,atom2,atom3]],axis=0)
+							charges[bi] = type + 2
 
 	### count bond types
 	nbondType = 3 + p.nmisBond
@@ -497,37 +502,44 @@ def writeMisbinding(outMisFile, mis_d2_cuts, p):
 
 
 ### write input file for lammps
-def writeInput(outSimFold, nhyb, nangle, nreact_hybBond, nreact_misBond, nreact_angleAct, nreact_angleDeact, bridgeEnds, nreact_unbridge, p):
+def writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_angleAct, nreact_angleDeact, bridgeEnds, nreact_unbridge, p):
 	print("Writing input file...")
 
 	### computational parameters
 	verlet_skin				= 4		# nm			- width of neighbor list skin (= r12_cut - sigma)
 	neigh_every				= 10	# steps			- how often to consider updating neighbor list
 	bond_res 				= 0.1	# nm			- distance between tabular bond interpolation points
-	F_forceBind				= 1		# kcal/mol/nm	- force to apply for forced binding
-	r12_cut_react_hybBond	= 3		# nm			- cutoff radius for potential hybridization bonds
 	react_every_bondHyb		= 1E2	# steps			- how often to check for new hybridization bonds
 	react_every_bondMis		= 1E4	# steps			- how often to check for misbinding
 	react_every_angleAct	= 1E4	# steps			- how often to check for new angles
 	react_every_angleDeact	= 1E2	# steps			- how often to check for removing angles
 	react_every_bondDehyb	= 1E2	# steps			- how often to check for removing hybridization bonds
+	react_every_bridge		= 1E2	# steps			- how often to check for bridge creation or destruction
+	r12_cut_react_hybBond	= 3		# nm			- cutoff radius for potential hybridization bonds
+	r12_cut_react_bridge	= 3		# nm			- cutoff radius for bridging reactions
 	comm_cutoff				= 12	# nm			- communication cutoff (relevant for parallelization)
 	U_barrier_comm			= 10	# kcal/mol		- energy barrier to exceeding communication cutoff
+	F_forceBind				= 1		# kcal/mol/nm	- force to apply for forced binding
 
 	### adjust comm_cutoff 	for forced binding
 	if p.forceBind:
 		comm_cutoff = int(np.sqrt(3)*p.dbox+1)
 
-	### write table for full hybridization bond
-	npoint_bondHyb = writeBondHyb(outSimFold, "hybFull", p.U_hyb, F_forceBind, comm_cutoff, U_barrier_comm, bond_res, p)
+	### number of bond dybridization reactions
+	nreact_bondDehyb = nreact_bondHyb
+	if not p.dehyb:
+		nreact_bondDehyb = 0
 
-	### write table for partial hybridization bond
+	### write table for full hybridization bond
+	npoint_hybBond = writeHybBond(outSimFold, "hybFull", p.U_hyb, F_forceBind, comm_cutoff, U_barrier_comm, bond_res, p)
+
+	### write table for partial hybridization bonds
 	for i in range(p.nmisBond):
 		U_hyb = p.U_mis_max - (i+0.5)*(p.U_mis_max-p.U_mis_min)/p.nmisBond - p.U_mis_shift
-		writeBondHyb(outSimFold, f"hybPart{i+1}", U_hyb, F_forceBind, comm_cutoff, U_barrier_comm, bond_res, p)
+		writeHybBond(outSimFold, f"hybPart{i+1}", U_hyb, F_forceBind, comm_cutoff, U_barrier_comm, bond_res, p)
 
 	### count digits
-	len_nrmB = len(str(nreact_misBond))
+	len_nrbM = len(str(nreact_bondMis))
 	len_nraH = len(str(nreact_angleAct))
 
 	### open file
@@ -572,7 +584,7 @@ def writeInput(outSimFold, nhyb, nangle, nreact_hybBond, nreact_misBond, nreact_
 
 		### basic bonded interactions
 		f.write(
-		   f"bond_style      hybrid zero harmonic table linear {npoint_bondHyb}\n"
+		   f"bond_style      hybrid zero harmonic table linear {npoint_hybBond}\n"
 		   f"bond_coeff      1 harmonic {p.k_x/2:0.2f} {p.r12_eq:0.2f}\n"
 		   f"bond_coeff      2 table bond_hybFull.txt hybFull\n")
 
@@ -595,6 +607,7 @@ def writeInput(outSimFold, nhyb, nangle, nreact_hybBond, nreact_misBond, nreact_
 		   f"variable        varCF{i+1} atom d_CF{i+1}\n")
 		f.write(
 			"variable        varQ atom q\n"
+			"variable        varID atom id\n"
 		   f"group           scaf type == 1\n"
 		   f"group           real id <= {p.nbead}\n"
 			"group           mobile type 1 2\n\n")
@@ -619,13 +632,13 @@ def writeInput(outSimFold, nhyb, nangle, nreact_hybBond, nreact_misBond, nreact_
 			"## Molecules\n")
 
 		### hyb bond templates
-		for ri in range(nreact_hybBond): f.write(
+		for ri in range(nreact_bondHyb): f.write(
 		   f"molecule        hybBond{ri+1}_mol_bondNo react/hybBond{ri+1}_mol_bondNo.txt\n"
 		   f"molecule        hybBond{ri+1}_mol_bondYa react/hybBond{ri+1}_mol_bondYa.txt\n")
 
 		### misbinding templates
-		for ri in range(nreact_misBond): f.write(
-		   f"molecule        misBond{ri+1:0>{len_nrmB}}_mol react/misBond{ri+1:0>{len_nrmB}}_mol.txt\n")
+		for ri in range(nreact_bondMis): f.write(
+		   f"molecule        misBond{ri+1:0>{len_nrbM}}_mol react/misBond{ri+1:0>{len_nrbM}}_mol.txt\n")
 
 		### angle activation templates
 		for ri in range(nreact_angleAct): f.write(
@@ -635,7 +648,7 @@ def writeInput(outSimFold, nhyb, nangle, nreact_hybBond, nreact_misBond, nreact_
 		for ri in range(nreact_angleDeact): f.write(
 		   f"molecule        angleDeact{ri+1}_mol react/angleDeact{ri+1}_mol.txt\n")
 
-		### bridge creating templates
+		### bridge templates
 		if bridgeEnds: f.write(
 		   f"molecule        bridge_mol_bondNo react/bridge_mol_bondNo.txt\n"
 		   f"molecule        bridge_mol_bondYa react/bridge_mol_bondYa.txt\n")
@@ -654,16 +667,16 @@ def writeInput(outSimFold, nhyb, nangle, nreact_hybBond, nreact_misBond, nreact_
 			"fix             reactions all bond/react reset_mol_ids no")
 
 		### bond hybridization reactions
-		for ri in range(nreact_hybBond): f.write(
+		for ri in range(nreact_bondHyb): f.write(
 		   f" &\n                react bondHyb{ri+1} all {int(react_every_bondHyb)} 0.0 {r12_cut_react_hybBond:.1f} hybBond{ri+1}_mol_bondNo hybBond{ri+1}_mol_bondYa react/bondHyb{ri+1}_map.txt custom_charges 2")
 		
 		### bond dehybridization reactions
-		for ri in range(nreact_hybBond): f.write(
+		for ri in range(nreact_bondDehyb): f.write(
 		   f" &\n                react bondDehyb{ri+1} all {int(react_every_bondDehyb)} {r12_cut_react_hybBond:.1f} {comm_cutoff} hybBond{ri+1}_mol_bondYa hybBond{ri+1}_mol_bondNo react/bondDehyb{ri+1}_map.txt custom_charges 2")
 		
 		### misbinding reactions
-		for ri in range(nreact_misBond): f.write(
-		   f" &\n                react bondMis{ri+1:0>{len_nrmB}} all {int(react_every_bondMis)} 0.0 {r12_cut_react_hybBond:.1f} misBond{ri+1:0>{len_nrmB}}_mol misBond{ri+1:0>{len_nrmB}}_mol react/bondMis{ri+1:0>{len_nrmB}}_map.txt custom_charges 1")
+		for ri in range(nreact_bondMis): f.write(
+		   f" &\n                react bondMis{ri+1:0>{len_nrbM}} all {int(react_every_bondMis)} 0.0 {r12_cut_react_hybBond:.1f} misBond{ri+1:0>{len_nrbM}}_mol misBond{ri+1:0>{len_nrbM}}_mol react/bondMis{ri+1:0>{len_nrbM}}_map.txt custom_charges 1")
 
 		### angle activation reactions
 		for ri in range(nreact_angleAct): f.write(
@@ -675,7 +688,7 @@ def writeInput(outSimFold, nhyb, nangle, nreact_hybBond, nreact_misBond, nreact_
 
 		### bridge making reaction
 		if bridgeEnds: f.write(
-		   f" &\n                react bridge all {int(react_every_bondHyb)} 0.0 {p.r12_eq:.2f} bridge_mol_bondNo bridge_mol_bondYa react/bridge_map.txt custom_charges 3")
+		   f" &\n                react bridge all {int(react_every_bondHyb)} 0.0 {r12_cut_react_bridge:.2f} bridge_mol_bondNo bridge_mol_bondYa react/bridge_map.txt custom_charges 3")
 
 		### bridge breaking reactions
 		for ri in range(nreact_unbridge): f.write(
@@ -840,33 +853,36 @@ def writeReactHybBond(outReactFold, mis_d2_cuts, p):
 
 		#-------- dehybridization reaction map --------#
 
-		### count constraints
-		ncons = sum(1 for x in atoms if x[0] == 0)
+		### only if dehybridization
+		if p.dehyb:
 
-		mapFile = f"{outReactFold}bondDehyb{ri+1}_map.txt"
-		with open(mapFile, 'w') as f:
+			### count constraints
+			ncons = sum(1 for x in atoms if x[0] == 0)
 
-			f.write("## Hybridization\n")
-			f.write(f"{natom} equivalences\n")
-			f.write(f"{nedge} edgeIDs\n")
-			f.write(f"{ncons} constraints\n")
+			mapFile = f"{outReactFold}bondDehyb{ri+1}_map.txt"
+			with open(mapFile, 'w') as f:
 
-			f.write(f"\nInitiatorIDs\n\n")
-			f.write("1\n")
-			f.write("2\n")
+				f.write("## Hybridization\n")
+				f.write(f"{natom} equivalences\n")
+				f.write(f"{nedge} edgeIDs\n")
+				f.write(f"{ncons} constraints\n")
 
-			f.write(f"\nEdgeIDs\n\n")
-			for edgei in range(nedge):
-				f.write(f"{edges[edgei]+1}\n")
+				f.write(f"\nInitiatorIDs\n\n")
+				f.write("1\n")
+				f.write("2\n")
 
-			f.write("\nConstraints\n\n")
-			for atomi in range(natom):
-				if atoms[atomi][0] == 0:
-					f.write(f"custom \"rxnsum(v_varQ,{atomi+1}) == 1 || rxnsum(v_varQ,{atomi+1}) == 2\"\n")		# ensure angle deactivation
+				f.write(f"\nEdgeIDs\n\n")
+				for edgei in range(nedge):
+					f.write(f"{edges[edgei]+1}\n")
 
-			f.write("\nEquivalences\n\n")
-			for atomi in range(natom):
-				f.write(f"{atomi+1}\t{atomi+1}\n")
+				f.write("\nConstraints\n\n")
+				for atomi in range(natom):
+					if atoms[atomi][0] == 0:
+						f.write(f"custom \"rxnsum(v_varQ,{atomi+1}) == 1 || rxnsum(v_varQ,{atomi+1}) == 2\"\n")		# ensure angle deactivation
+
+				f.write("\nEquivalences\n\n")
+				for atomi in range(natom):
+					f.write(f"{atomi+1}\t{atomi+1}\n")
 
 		#-------- end maps --------#
 
@@ -1484,8 +1500,8 @@ def writeReactAngleDeact(outReactFold, bridgeEnds, backbone_neighbors, complemen
 
 			### avoid ends when appropriate
 			if bridgeEnds:
-				f.write(f"custom \"round(rxnsum(id,2)) != {p.n_scaf}\"\n")
-				f.write(f"custom \"round(rxnsum(id,2)) != 1\"\n")
+				f.write(f"custom \"round(rxnsum(v_varID,2)) != {p.n_scaf}\"\n")
+				f.write(f"custom \"round(rxnsum(v_varID,2)) != 1\"\n")
 		
 			f.write("\nEquivalences\n\n")
 			for atomi in range(natom):
@@ -1585,50 +1601,52 @@ def writeReactAngleDeact(outReactFold, bridgeEnds, backbone_neighbors, complemen
 def writeReactBridge(outReactFold, backbone_neighbors, complements, is_crossover, p):
 	print("Writing bridging react files...")
 
+	### currently does not work
+	return False, 0
+
 	### template description
 	# central scaffold (5' end), central staple, flanking scaffold (3' end), flanking scaffold
 	# initiated by central scaffold (5' end) and flanking scaffold (3' end)
 	# only one template
 
 	### fragment desciption
-	# 1 - central scaffold (5' end), used to: ensure 5' end identity
-	# 2 - flanking scaffold (3' end), used to: ensure 3' end identity, ensure bound hyb status
-	# 3 - flanking scaffold, used to: set angle status of flanking scaffold with custom charges
+	# 1 - left central scaffold (3' end), used to: ensure 3' end identity
+	# 2 - right central scaffold (5' end), used to: ensure 5' end identity
+	# 3 - flanking scaffolds and staples, used to: set angle and hyb status with custom charges
 
 	### determine if scaffold ends (if they exist) are bridged
 	if p.circularScaf or getAssembledNeighbors(0,backbone_neighbors,complements)[0] == -1:
 		return False, 0
-
-	### general warning (briding needs attention, primarily for multiple staple copies and misbinding)
-	print("Flag: Bridging reactions work in theory, but need more testing - proceed with caution.")
 
 	### warning if no dehybridization
 	if not p.dehyb:
 		print("Flag: Scaffold ends are bridged, but dehybridization is is off, so end bridging is permenant.")
 
 	### core beads
-	a = 0
+	a = p.n_scaf-1
+	b = 0
 	aC = complements[a]
-	a_5p = p.n_scaf-1
-	a_3p = 1
+	bC = complements[b]
+	a_5p = p.n_scaf-2
+	b_3p = 1
 
 	### core topology
-	atoms = [ [0,-1,a], [1,-1,aC], [0,-1,a_5p], [0,int(is_crossover[a_3p]),a_3p] ]
-	bonds = [ [1,a,aC], [0,a,a_3p] ]
-	edges = [ aC, a_5p, a_3p ]
+	atoms = [ [0,-1,a], [0,-1,b], [1,1,bC], [1,1,aC], [0,int(is_crossover[a_5p]),a_5p], [0,int(is_crossover[b_3p]),b_3p] ]
+	bonds = [ [1,a,aC], [1,b,bC], [0,bC,aC], [0,a_5p,a], [0,b,b_3p] ]
+	edges = [ bC, aC, a_5p, b_3p ]
 
 	### renumber
 	atoms,bonds,edges = renumberAtoms_bridgeTemplate(atoms,bonds,edges)
 
 	### define fragments
-	frags = [ [0], [2], [3] ]
+	frags = [ [0], [1], [2,3,4,5] ]
 
 	### pre reaction template
 	molFile = f"{outReactFold}bridge_mol_bondNo.txt"
 	writeMolecule(molFile,atoms,bonds,None,frags)
 
 	### reaction adjustments (add bridging bond)
-	bnonds.append([0,2,0])
+	bonds.append([0,0,1])
 
 	### pre reaction template
 	molFile = f"{outReactFold}bridge_mol_bondYa.txt"
@@ -1646,11 +1664,11 @@ def writeReactBridge(outReactFold, backbone_neighbors, complements, is_crossover
 		f.write("## Hybridization\n")
 		f.write(f"{natom} equivalences\n")
 		f.write(f"{nedge} edgeIDs\n")
-		f.write(f"3 constraints\n")
+		f.write(f"2 constraints\n")
 
 		f.write(f"\nInitiatorIDs\n\n")
 		f.write(f"1\n")
-		f.write(f"3\n")
+		f.write(f"2\n")
 
 		f.write(f"\nEdgeIDs\n\n")
 		for edgei in range(nedge):
@@ -1661,15 +1679,14 @@ def writeReactBridge(outReactFold, backbone_neighbors, complements, is_crossover
 			f.write(f"{atomi+1}\t{atomi+1}\n")
 
 		f.write("\nConstraints\n\n")
-		f.write(f"custom \"round(rxnsum(id,1)) == 1\"\n")				# ensure 5' end identity
-		f.write(f"custom \"round(rxnsum(id,2)) == {p.n_scaf}\"\n")		# ensure 3' end identity
-		f.write(f"custom \"round(rxnsum(v_varQ,2)) >= 2\"\n")			# ensure 3' bound hyb status
+		f.write(f"custom \"round(rxnsum(v_varID,1)) == {p.n_scaf}\"\n")		# ensure 3' end identity
+		f.write(f"custom \"round(rxnsum(v_varID,2)) == 1\"\n")				# ensure 5' end identity
 
 	#-------- end map --------#
 
 	### no unbiridging if no dehybridization
 	if not p.dehyb:
-		return 0
+		return True, 0
 
 	### template description
 	# central scaffold (end 1), central staple, flanking scaffold (end 2), flanking scaffold
@@ -1677,25 +1694,25 @@ def writeReactBridge(outReactFold, backbone_neighbors, complements, is_crossover
 	# one or two templates
 
 	### fragment desciption
-	# 1 - central scaffold and flanking scaffolds, used to: set angle status with custom charges
-	# 2 - central scaffold (end 1), used to: ensure end identity, ensure angle deactivation
-	# 3 - flanking scaffold (end 2), used to: ensure end identity, ensure angle deactivation
-	# 4 - flanking scaffold, used to: ensure angle deactivation
+	# 1 - all beads, used to: set angle and hyb status with custom charges
+	# 2 - central scaffold (end 1), used to: ensure end identity, ensure angle type
+	# 3 - flanking scaffold (end 2), used to: ensure end identity, ensure angle type
+	# 4 - flanking scaffold, used to: ensure angle type
 
 	### initialize unbridging templates
 	atoms_all = []
 	bonds_all = []
 	edges_all = []
 
-	### core beads (center as 5' end)
+	### core beads (center as 5' end, working 5' to 3')
 	a = 0
 	aC = complements[a]
 	a_5p = p.n_scaf-1
 	a_3p = 1
 
 	### core topology (center as 5' end)
-	atoms = [ [0,int(is_crossover[a]),a], [1,-1,aC], [0,int(is_crossover[a_5p]),a_5p], [0,int(is_crossover[a_3p]),a_3p] ]
-	bonds = [ [1,a,aC], [0,a,a_3p] ]
+	atoms = [ [0,int(is_crossover[a]),a], [1,1,aC], [0,int(is_crossover[a_5p]),a_5p], [0,int(is_crossover[a_3p]),a_3p] ]
+	bonds = [ [1,a,aC], [0,a_5p,a], [0,a,a_3p] ]
 	edges = [ aC, a_5p, a_3p ]
 
 	### renumber, add to template list
@@ -1704,15 +1721,15 @@ def writeReactBridge(outReactFold, backbone_neighbors, complements, is_crossover
 	bonds_all.append(copy.deepcopy(bonds))
 	edges_all.append(copy.deepcopy(edges))
 
-	### core beads (center as 3' end)
+	### core beads (center as 3' end, working 3' to 5')
 	a = p.n_scaf-1
 	aC = complements[a]
 	a_3p = 0
 	a_5p = p.n_scaf-2
 
 	### core topology (center as 3' end)
-	atoms = [ [0,int(is_crossover[a]),a], [1,-1,aC], [0,int(is_crossover[a_3p]),a_3p], [0,int(is_crossover[a_5p]),a_5p] ]
-	bonds = [ [1,a,aC], [0,a,a_5p] ]
+	atoms = [ [0,int(is_crossover[a]),a], [1,1,aC], [0,int(is_crossover[a_3p]),a_3p], [0,int(is_crossover[a_5p]),a_5p] ]
+	bonds = [ [1,a,aC], [0,a_3p,a], [0,a,a_5p] ]
 	edges = [ aC, a_3p, a_5p ]
 
 	### renumber, add to template list
@@ -1727,26 +1744,26 @@ def writeReactBridge(outReactFold, backbone_neighbors, complements, is_crossover
 	atoms_all,bonds_all,edges_all = unzip3(templates)
 
 	### define fragments
-	frags = [ [0,2,3], [0], [2], [3] ]
+	frags = [ [0,1,2,3], [0], [2], [3] ]
 
 	### loop over reactions
 	nreact_unbridge = len(atoms_all)
 	for ri in range(nreact_unbridge):
 
 		### make copies
-		atoms = dopy.deepcopy(atoms_all[ri])
-		bonds = dopy.deepcopy(bonds_all[ri])
-		edges = dopy.deepcopy(edges_all[ri])
+		atoms = copy.deepcopy(atoms_all[ri])
+		bonds = copy.deepcopy(bonds_all[ri])
+		edges = copy.deepcopy(edges_all[ri])
 
 		### pre reaction template
-		molFile = f"{outReactFold}unbridge{ri+1}_mol_bondNo.txt"
+		molFile = f"{outReactFold}unbridge{ri+1}_mol_bondYa.txt"
 		writeMolecule(molFile,atoms,bonds,None,frags)
 
-		### reaction adjustments (add bridging bond)
-		bnonds.append([0,2,0])
+		### reaction adjustments (remove bridging bond)
+		bonds.pop(1)
 
 		### post reaction template
-		molFile = f"{outReactFold}unbridge{ri+1}_mol_bondYa.txt"
+		molFile = f"{outReactFold}unbridge{ri+1}_mol_bondNo.txt"
 		writeMolecule(molFile,atoms,bonds,None,frags)
 
 		### count atoms and edges
@@ -1772,16 +1789,16 @@ def writeReactBridge(outReactFold, backbone_neighbors, complements, is_crossover
 				f.write(f"{edges[edgei]+1}\n")
 
 			f.write("\nConstraints\n\n")
-			f.write(f"custom \"round(rxnsum(id,2)) == 1 || "
-							 f"round(rxnsum(id,2)) == {p.n_scaf}\"\n")				# ensure end identity
-			f.write(f"custom \"round(rxnsum(id,3)) == 1 || "
-							 f"round(rxnsum(id,3)) == {p.n_scaf}\"\n")				# ensure end identity
+			f.write(f"custom \"round(rxnsum(v_varID,2)) == 1 || "
+							 f"round(rxnsum(v_varID,2)) == {p.n_scaf}\"\n")			# ensure end identity
+			f.write(f"custom \"round(rxnsum(v_varID,3)) == 1 || "
+							 f"round(rxnsum(v_varID,3)) == {p.n_scaf}\"\n")			# ensure end identity
 			f.write(f"custom \"round(rxnsum(v_varQ,2)) == {atoms[0][1]+1} || "
-							 f"round(rxnsum(v_varQ,2)) == {atoms[0][1]+3}\"\n")		# ensure central angle deactivation
+							 f"round(rxnsum(v_varQ,2)) == {atoms[0][1]+3}\"\n")		# ensure end 1 angle type
 			f.write(f"custom \"round(rxnsum(v_varQ,3)) == {atoms[2][1]+1} || "
-							 f"round(rxnsum(v_varQ,3)) == {atoms[2][1]+3}\"\n")		# ensure left angle deactivation
+							 f"round(rxnsum(v_varQ,3)) == {atoms[2][1]+3}\"\n")		# ensure end 2 angle type
 			f.write(f"custom \"round(rxnsum(v_varQ,4)) == {atoms[3][1]+1} || "
-							 f"round(rxnsum(v_varQ,4)) == {atoms[3][1]+3}\"\n")		# ensure right angle deactivation
+							 f"round(rxnsum(v_varQ,4)) == {atoms[3][1]+3}\"\n")		# ensure flanking angle type
 		
 			f.write("\nEquivalences\n\n")
 			for atomi in range(natom):
@@ -1796,6 +1813,9 @@ def writeReactBridge(outReactFold, backbone_neighbors, complements, is_crossover
 ### write molecule template file
 def writeMolecule(molFile, atoms, bonds=None, angls=None, frags=None, includeCharge=True):
 	natom = len(atoms)
+	if bonds is not None and len(bonds) == 0: bonds = None
+	if angls is not None and len(angls) == 0: angls = None
+	if frags is not None and len(frags) == 0: frags = None
 
 	with open(molFile, 'w') as f:
 		f.write("## Molecule Template\n")
@@ -1835,7 +1855,7 @@ def writeMolecule(molFile, atoms, bonds=None, angls=None, frags=None, includeCha
 
 
 ### write table for hybridization bond
-def writeBondHyb(outSimFold, bondName, U_hyb, F_forceBind, comm_cutoff, U_barrier_comm, bond_res, p):
+def writeHybBond(outSimFold, bondName, U_hyb, F_forceBind, comm_cutoff, U_barrier_comm, bond_res, p):
 	bondFile = outSimFold + "bond_" + bondName + ".txt"
 	npoint = int(comm_cutoff/bond_res+1)
 
