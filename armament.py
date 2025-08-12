@@ -229,7 +229,7 @@ def readGeo(geoFile, **kwargs):
 
 
 	### get bond information
-	if extraLabel != None:
+	if extraLabel is not None:
 		for i in range(len(content)):
 			if len(content[i].split()) > 0 and content[i].split()[0] == extraLabel:
 				line_index = i+2
@@ -310,6 +310,10 @@ def readCopies(copiesFile):
 
 ### write lammps-style geometry
 def writeGeo(geoFile, dbox3, r, molecules='auto', types='auto', bonds=None, angles=None, **kwargs):
+
+	### notes
+	# bonds: nbond x 3 (bond type, atom 1, atom2) numpy array
+	# angles: nangle x 4 (angle type, atom 1, atom2, atom 3) numpy array
 
 	### added keyword args
 	natomType	= 'auto'	if 'natomType' not in kwargs else kwargs['natomType']
@@ -535,7 +539,7 @@ def plotHist(A, Alabel=None, title=None, figLabel="Hist", nbin='auto', Alim_bin=
 	if plotAsLine == False:
 		plt.hist(A, nbin, weights=weights, range=Alim_bin, density=useDensity, alpha=alpha, edgecolor='black')
 	else:
-		heights, edges = np.histogram(A, nbin, weights=weights, range=Alim_bin, useDensity=True)
+		heights, edges = np.histogram(A, nbin, weights=weights, range=Alim_bin, density=True)
 		edges = edges[:len(edges)-1] + 1/2*(edges[1]-edges[0])
 		plt.plot(edges, heights, color='black')
 	if plotAvgLine:

@@ -54,6 +54,21 @@ def readTop(topFile):
 	return strands, nba_total
 
 
+### read misbinding cutoffs and energies file
+def readMis(misFile):
+	ars.testFileExist(misFile,"misbinding")
+	with open(misFile) as f:
+		content = f.readlines()
+	nmisBond = len(content)
+	mis_d2_cuts = np.zeros(nmisBond)
+	Us_mis = np.zeros(nmisBond)
+	for i in range(nmisBond):
+		line = content[i].split()
+		mis_d2_cuts[i] = line[0]
+		Us_mis[i] = line[1]
+	return mis_d2_cuts, Us_mis
+
+
 ### read hybridization status file
 def readHybStatus(hybFile, nstep_skip=0, coarse_time=1, nstep_max="all"):
 
@@ -145,9 +160,6 @@ def setOvitoBasics(pipeline):
 ### Calculation Managers
 
 ### calculate first bind times from hybridization status
-# integer for timestep of first hybridization
-# 0 for never hybridized
-# -1 for no complement
 def calcFirstHybTimes(hyb_status, complements, n_scaf, dump_every):
 	nstep = hyb_status.shape[0]
 	first_hyb_times = np.zeros(n_scaf)

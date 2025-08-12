@@ -25,6 +25,7 @@ class parameters:
 		self.ncompFactor = params['ncompFactor']
 		self.optCompFactors = params['optCompFactors']
 		self.optCompEfunc = params['optCompEfunc']
+		self.bridgeEnds = params['bridgeEnds']
 		self.dehyb = params['dehyb']
 		self.debug = params['debug']
 		self.T = params['T']
@@ -76,6 +77,10 @@ class parameters:
 		if self.nmisBond > 0 and self.ncompFactor <= 1:
 			print("Flag: if including misbinding, number of complementary factors must be >1, setting to 2.")
 			self.ncompFactor = 2
+
+		### check number fo complementary factors
+		if self.bridgeEnds == True:
+			print("Flag: End bridging reactions do not work, proceed with caution.")
 	
 
 	### record values

@@ -97,9 +97,7 @@ def main():
 
 		### get pickled data
 		connFile = "analysis/connectivity_vars.pkl"
-		ars.testFileExist(connFile,"connectivity")
-		with open(connFile,"rb") as f:
-			[strands, bonds_backbone, complements, n_scaf, nbead] = pickle.load(f)[:5]
+		strands, bonds_backbone, complements, n_scaf, nbead = readConn(connFile)
 
 		### get minimum number of steps
 		nstep_allSim = np.zeros(nsim,dtype=int)
@@ -249,6 +247,21 @@ def writeOvito(ovitoFile, outGeoFile):
 	### write ovito file
 	scene.save(ovitoFile)
 	pipeline.remove_from_scene()
+
+
+################################################################################
+### File Handlers
+
+def readConn(connFile):
+	ars.testFileExist(connFile, "connectivity")
+	with open(connFile, 'rb') as f:
+		params = pickle.load(f)[0]
+	strands = params['strands']
+	bonds_backbone = params['bonds_backbone']
+	complements = params['complements']
+	n_scaf = params['n_scaf']
+	nbead = params['nbead']
+	return strands, bonds_backbone, complements, n_scaf, nbead
 
 
 ################################################################################
@@ -435,7 +448,7 @@ def lassoPCA(X, y):
 	plt.grid(True)
 
 
-### best bet
+### bestest bet
 def mlp(X, y):
 
 	# Train-test split

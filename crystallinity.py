@@ -34,12 +34,13 @@ def main():
 	parser.add_argument('--clusterFile',	type=str,	default=None,	help='name of cluster file, only used for crystallinity')	
 	parser.add_argument('--calcRMSD',		type=str,	default=False,	help='whether to calculate RMSD')		
 	parser.add_argument('--cadFile',		type=str,	default=None,	help='if calculating RMSD, name of caDNAno file')	
+	parser.add_argument('--calcACN',		type=str,	default=False,	help='whether to calculate ACN')		
 	parser.add_argument('--loadResults',	type=int,	default=False,	help='whether to load the results from a pickle file')
 	parser.add_argument('--nstep_skip',		type=float,	default=0,		help='if not loading results, number of recorded initial steps to skip')
 	parser.add_argument('--nstep_max',		type=float,	default=0,		help='if not loading results, max number of recorded steps to use (0 for all)')
 	parser.add_argument('--coarse_time',	type=int,	default=1,		help='if not loading results, coarse factor for time steps')
 	parser.add_argument('--mov_avg_stride',	type=int,	default=1,		help='stride length for moving average')
-	parser.add_argument('--saveFig',		type=int,	default=False,	help='whether to save png of figures')
+	parser.add_argument('--saveFig',		type=int,	default=False,	help='whether to save pdf of figures')
 
 	### set arguments
 	args = parser.parse_args()
@@ -49,6 +50,7 @@ def main():
 	clusterFile = args.clusterFile
 	calcRMSD = args.calcRMSD
 	cadFile = args.cadFile
+	calcACN = args.calcACN
 	loadResults = args.loadResults
 	nstep_skip = int(args.nstep_skip)
 	nstep_max = int(args.nstep_max)
@@ -79,13 +81,12 @@ def main():
 
 		### get pickled data
 		connFile = "analysis/connectivity_vars.pkl"
-		ars.testFileExist(connFile, "connectivity")
-		with open(connFile, 'rb') as f:
-			n_scaf = pickle.load(f)[3]
+		n_scaf = readConn(connFile)
 
 		### get ideal positions
 		if calcRMSD:
 			r = utils.initPositionsCaDNAno(cadFile)[0]
+			r_ideal = r[:n_scaf]
 
 		### get minimum number of steps
 		nstep_allSim = np.zeros(nsim,dtype=int)
@@ -105,17 +106,18 @@ def main():
 
 			### loop through simulations
 			S_allSim = np.zeros((nsim,nstep_use))
-			acn_allSim = np.zeros(nsim)
 			RMSD_allSim = np.zeros((nsim,nstep_use))
+			ACN_allSim = np.zeros(nsim)
 			for i in range(nsim):
 
 				### calculate crustallinity
 				datFile = simFolds[i] + "analysis/trajectory_centered.dat"
 				points, _, dbox = ars.readAtomDump(datFile, nstep_skip, coarse_time, bdis=bdis, nstep_max=nstep_use); print()
 				S_allSim[i] = utils.calcCrystallinity(points, dbox)
-				acn_allSim[i] = estimate_acn(points[-1])
 				if calcRMSD:
 					RMSD_allSim[i] = utils.calcRMSD(points, r_ideal)
+				if calcACN:
+					ACN_allSim[i] = estimate_acn(points[-1])
 
 		### clustered scaffold analysis
 		else:
@@ -130,6 +132,7 @@ def main():
 			### loop through clusters
 			S_allSim = np.zeros((ncluster,nstep_use))
 			RMSD_allSim = None
+			ACN_allSIm = None
 			for i in range(ncluster):
 
 				### calculate crystallinity
@@ -138,14 +141,14 @@ def main():
 		### store results
 		resultsFile = "analysis/crystallinity_vars.pkl"
 		with open(resultsFile, 'wb') as f:
-			pickle.dump([S_allSim, acn_allSim, RMSD_allSim, dump_every], f)
+			pickle.dump([S_allSim, RMSD_allSim, ACN_allSim, dump_every], f)
 
 	### load results
 	else:
 		resultsFile = "analysis/crystallinity_vars.pkl"
 		ars.testFileExist(resultsFile,"results")
 		with open(resultsFile, 'rb') as f:
-			[S_allSim, acn_allSim, RMSD_allSim, dump_every] = pickle.load(f)
+			[S_allSim, RMSD_allSim, ACN_allSim, dump_every] = pickle.load(f)
 
 
 ################################################################################
@@ -158,23 +161,25 @@ def main():
 	### report best simulations
 	if copiesFile is not None:
 		copyNames = ars.readCopies(copiesFile)[0]
-		sorted_results = sorted(zip(S_allSim[:,-1],acn_allSim,copyNames), reverse=True)
-		for S_final, acn, copyName in sorted_results:
-			print(f"{copyName}: {S_final:0.4f}, {acn:0.4f}")
+		sorted_results = sorted(zip(S_allSim[:,-1], ACN_allSim, copyNames), reverse=True)
+		for S_final, ACN, copyName in sorted_results:
+			print(f"{copyName}: {S_final:0.4f}, {ACN:0.4f}")
 
-	### knot
-	ars.magicPlot()
-	plt.figure("ACN",figsize=(8,6))
-	plt.scatter(acn_allSim,S_allSim[:,-1])
-	plt.xlabel("Average Crossing Number")
-	plt.ylabel("Final Crystallinity")
-
-	### plot
-	plotCrystallinity(S_allSim, dump_every)
-	if saveFig: plt.savefig("analysis/crystallinity.pdf")
+	### RMSD
 	if calcRMSD:
 		plotRMSD(RMSD_allSim, dump_every)
 		if saveFig: plt.savefig("analysis/RMSD.pdf")
+
+	### knotty
+	if calcACN:
+		plotACNvsS(ACN_allSim, S_allSim)
+		if saveFig: plt.savefig("analysis/ACN.pdf")
+
+	### crystallinity
+	plotCrystallinity(S_allSim, dump_every)
+	if saveFig: plt.savefig("analysis/crystallinity.pdf")
+
+	### display
 	if not saveFig: plt.show()
 
 
@@ -205,7 +210,7 @@ def plotCrystallinity(S_allSim, dump_every):
 
 	### plot
 	ars.magicPlot()
-	plt.figure("S",figsize=(8,6))
+	plt.figure("S")
 	if nsim > 1:
 		for i in range(nsim):
 			color = cmap(norm(ranks[i]))
@@ -217,6 +222,15 @@ def plotCrystallinity(S_allSim, dump_every):
 	plt.ylim(0,0.8)
 	plt.xlabel("Time [$s$]")
 	plt.ylabel("Crystallinity")
+
+
+### plot average crossing number
+def plotACNvsS(ACN_allSim, S_allSim):
+	ars.magicPlot()
+	plt.figure("ACN")
+	plt.scatter(ACN_allSim,S_allSim[:,-1])
+	plt.xlabel("Average Crossing Number")
+	plt.ylabel("Final Crystallinity")
 
 
 ### plot average Landau-De Gennes crystallinity parameter
@@ -242,8 +256,8 @@ def plotRMSD(RMSD_allSim, dump_every):
 	ranks = [ sorted(RMSD_allSim[:,-1]).index(x) + 1 for x in RMSD_allSim[:,-1] ]
 
 	### plot
-	ars.magicPlot(pubReady=True)
-	plt.figure("RMSD",figsize=(8,6))
+	ars.magicPlot()
+	plt.figure("RMSD")
 	if nsim > 1:
 		for i in range(nsim):
 			color = cmap(norm(ranks[i]))
@@ -254,61 +268,69 @@ def plotRMSD(RMSD_allSim, dump_every):
 	plt.plot(time[-1],RMSD_avg[-1],'o',color='k')
 	plt.xlabel("Time [$s$]")
 	plt.ylabel("$RMSD$")
-	plt.title("Root Mean Square Displacement")
+
+
+################################################################################
+### File Handlers
+
+def readConn(connFile):
+	ars.testFileExist(connFile, "connectivity")
+	with open(connFile, 'rb') as f:
+		params = pickle.load(f)[0]
+	n_scaf = params['n_scaf']
+	return n_scaf
 
 
 ################################################################################
 ### Knotty
 
 def generate_random_projection():
-    """Generate a random 3D-to-2D orthonormal projection matrix."""
-    vec = np.random.randn(3)
-    vec /= np.linalg.norm(vec)
-    if np.allclose(vec, [0, 0, 1]):
-        tmp = np.array([0, 1, 0])
-    else:
-        tmp = np.array([0, 0, 1])
-    right = np.cross(tmp, vec)
-    right /= np.linalg.norm(right)
-    up = np.cross(vec, right)
-    return np.stack([right, up])  # 2x3
+	vec = np.random.randn(3)
+	vec /= np.linalg.norm(vec)
+	if np.allclose(vec, [0, 0, 1]):
+		tmp = np.array([0, 1, 0])
+	else:
+		tmp = np.array([0, 0, 1])
+	right = np.cross(tmp, vec)
+	right /= np.linalg.norm(right)
+	up = np.cross(vec, right)
+	return np.stack([right, up])
 
 def project_chain(chain, proj_matrix):
-    return chain @ proj_matrix.T  # (N,3) x (3,2) -> (N,2)
+	return chain @ proj_matrix.T
 
 def fast_segments_intersect(a1, a2, b1, b2):
-    """Vectorized 2D segment intersection test using orientation."""
-    def orientation(p, q, r):
-        return np.sign((q[0] - p[0]) * (r[1] - p[1]) -
-                       (q[1] - p[1]) * (r[0] - p[0]))
+	def orientation(p, q, r):
+		return np.sign((q[0] - p[0]) * (r[1] - p[1]) -
+					   (q[1] - p[1]) * (r[0] - p[0]))
 
-    o1 = orientation(a1, a2, b1)
-    o2 = orientation(a1, a2, b2)
-    o3 = orientation(b1, b2, a1)
-    o4 = orientation(b1, b2, a2)
+	o1 = orientation(a1, a2, b1)
+	o2 = orientation(a1, a2, b2)
+	o3 = orientation(b1, b2, a1)
+	o4 = orientation(b1, b2, a2)
 
-    return (o1 != o2) and (o3 != o4)
+	return (o1 != o2) and (o3 != o4)
 
 def count_crossings(proj_chain):
-    n = len(proj_chain)
-    crossings = 0
-    for i in range(n):
-        p1, p2 = proj_chain[i], proj_chain[(i + 1) % n]
-        for j in range(i + 2, n):
-            if abs(i - j) == 1 or (i == 0 and j == n - 1):
-                continue
-            q1, q2 = proj_chain[j], proj_chain[(j + 1) % n]
-            if fast_segments_intersect(p1, p2, q1, q2):
-                crossings += 1
-    return crossings
+	n = len(proj_chain)
+	crossings = 0
+	for i in range(n):
+		p1, p2 = proj_chain[i], proj_chain[(i + 1) % n]
+		for j in range(i + 2, n):
+			if abs(i - j) == 1 or (i == 0 and j == n - 1):
+				continue
+			q1, q2 = proj_chain[j], proj_chain[(j + 1) % n]
+			if fast_segments_intersect(p1, p2, q1, q2):
+				crossings += 1
+	return crossings
 
 def estimate_acn(chain, num_projections=100):
-    total_crossings = 0
-    for _ in range(num_projections):
-        proj_matrix = generate_random_projection()
-        proj_chain = project_chain(chain, proj_matrix)
-        total_crossings += count_crossings(proj_chain)
-    return total_crossings / num_projections
+	total_crossings = 0
+	for _ in range(num_projections):
+		proj_matrix = generate_random_projection()
+		proj_chain = project_chain(chain, proj_matrix)
+		total_crossings += count_crossings(proj_chain)
+	return total_crossings / num_projections
 
 
 ### run the script

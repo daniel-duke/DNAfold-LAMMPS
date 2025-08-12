@@ -24,7 +24,8 @@ def main():
 	parser.add_argument('--nstep_skip',		type=float,	default=0,		help='number of recorded initial steps to skip')
 	parser.add_argument('--nstep_max',		type=float,	default=0,		help='max number of recorded steps to use (0 for all)')
 	parser.add_argument('--coarse_time',	type=int,	default=1,		help='coarse factor for time steps')
-	parser.add_argument('--saveFig',		type=int,	default=False,	help='whether to save png of figures')
+	parser.add_argument('--misFile',		type=str,	default=None,	help='name of misbinding file, which contains cutoffs and energies')
+	parser.add_argument('--saveFig',		type=int,	default=False,	help='whether to save pdf of figures')
 
 	### set arguments
 	args = parser.parse_args()
@@ -32,6 +33,7 @@ def main():
 	nstep_skip = int(args.nstep_skip)
 	nstep_max = int(args.nstep_max)
 	coarse_time = args.coarse_time
+	misFile = args.misFile
 	saveFig = args.saveFig
 
 	### get simulation folders
@@ -43,9 +45,7 @@ def main():
 
 	### get pickled data
 	connFile = "analysis/connectivity_vars.pkl"
-	ars.testFileExist(connFile, "connectivity")
-	with open(connFile, 'rb') as f:
-		[strands, _, _, n_scaf, nbead] = pickle.load(f)[:5]
+	strands, n_scaf, nbead = readConn(connFile)
 
 	### get minimum number of steps
 	nstep_allSim = np.zeros(nsim,dtype=int)
@@ -67,12 +67,29 @@ def main():
 		hybFile = simFolds[i] + "analysis/hyb_status.dat"
 		hyb_status_allSim[i] = utils.readHybStatus(hybFile, nstep_skip, coarse_time, nstep_use); print()
 
-	### analyze kinetics
+	### plot native complement kinetics
 	plotKinetics(hyb_status_allSim, strands, n_scaf, dump_every)
 	if saveFig: plt.savefig("analysis/kinetics.pdf")
+
+	### plot number of native complement hybridizations
 	plotNhyb(hyb_status_allSim, n_scaf, dump_every)
-	if saveFig: plt.savefig("analysis/n_hyb.pdf")
-	plotNmis(hyb_status_allSim, n_scaf, dump_every)
+	if saveFig: plt.savefig("analysis/nHyb.pdf")
+
+	### misbinding analysis
+	if misFile is not None:
+		### plot native complement kinetics
+		plotKinetics(hyb_status_allSim, strands, n_scaf, dump_every, False)
+		if saveFig: plt.savefig("analysis/kinetics_mis.pdf")
+
+		### plot total number of hybridizations
+		plotNhyb(hyb_status_allSim, n_scaf, dump_every, False)
+		if saveFig: plt.savefig("analysis/nHyb_mis.pdf")
+
+		### plot number of misbound hybridizations
+		plotNmis(hyb_status_allSim, n_scaf, dump_every, misFile)
+		if saveFig: plt.savefig("analysis/nMis.pdf")
+
+	### display
 	if not saveFig: plt.show()
 
 
@@ -80,7 +97,13 @@ def main():
 ### Plotters
 
 ### plot free staple kinetics
-def plotKinetics(hyb_status_allSim, strands, n_scaf, dump_every):
+def plotKinetics(hyb_status_allSim, strands, n_scaf, dump_every, nativeOnly=True):
+	figLabel = "kinetics"
+	if not nativeOnly: figLabel += " (mis)"
+
+	### adjust hybridization status in include misbonds
+	if not nativeOnly:
+		hyb_status_allSim = np.floor(hyb_status_allSim)
 
 	### calculate free staple concentrations
 	nsim = hyb_status_allSim.shape[0]
@@ -94,7 +117,7 @@ def plotKinetics(hyb_status_allSim, strands, n_scaf, dump_every):
 		stap_freedom = np.ones((nstap,nsim),dtype=int)
 		for j in range(n_scaf,nbead):
 			for k in range(nsim):
-				if int(hyb_status_allSim[k,i,j]) == 1:
+				if hyb_status_allSim[k,i,j] == 1:
 					stap_freedom[strands[j]-2,k] = 0
 		conc_indiv = np.mean(stap_freedom,axis=1)
 		conc_avg[i] = max(np.mean(conc_indiv), conc_min)
@@ -112,7 +135,7 @@ def plotKinetics(hyb_status_allSim, strands, n_scaf, dump_every):
 
 	### plot
 	ars.magicPlot()
-	plt.figure("Kinetics",figsize=(8,6))
+	plt.figure(figLabel)
 	plt.plot(time,np.log(conc_avg))
 	plt.fill_between(time,error_min,error_max,alpha=0.3)
 	plt.xlabel("Time [s]")
@@ -123,7 +146,13 @@ def plotKinetics(hyb_status_allSim, strands, n_scaf, dump_every):
 
 
 ### plot number of hybridizations
-def plotNhyb(hyb_status_allSim, n_scaf, dump_every):
+def plotNhyb(hyb_status_allSim, n_scaf, dump_every, nativeOnly=True):
+	figLabel = "nHyb"
+	if not nativeOnly: figLabel += " (mis)"
+
+	### adjust hybridization status in include misbonds
+	if not nativeOnly:
+		hyb_status_allSim = np.floor(hyb_status_allSim)
 
 	### calculate free staple concentrations
 	nsim = hyb_status_allSim.shape[0]
@@ -131,7 +160,7 @@ def plotNhyb(hyb_status_allSim, n_scaf, dump_every):
 	n_hyb_avg = np.zeros(nstep)
 	n_hyb_sem = np.zeros(nstep)
 	for i in range(nstep):
-		n_hyb_indiv = np.sum(np.floor(hyb_status_allSim[:,i,:n_scaf])==1,axis=1)
+		n_hyb_indiv = np.sum(hyb_status_allSim[:,i,:n_scaf]==1,axis=1)
 		n_hyb_avg[i] = np.mean(n_hyb_indiv)
 		n_hyb_sem[i] = ars.calcSEM(n_hyb_indiv)
 
@@ -142,7 +171,7 @@ def plotNhyb(hyb_status_allSim, n_scaf, dump_every):
 
 	### plot
 	ars.magicPlot()
-	plt.figure("Hyb",figsize=(8,6))
+	plt.figure(figLabel)
 	plt.plot(time,n_hyb_avg)
 	plt.fill_between(time,n_hyb_avg-n_hyb_sem,n_hyb_avg+n_hyb_sem,alpha=0.3)
 	plt.axhline(y=n_scaf,color='k',linestyle='--')
@@ -154,10 +183,11 @@ def plotNhyb(hyb_status_allSim, n_scaf, dump_every):
 
 
 ### plot number of hybridizations
-def plotNmis(hyb_status_allSim, n_scaf, dump_every):
+def plotNmis(hyb_status_allSim, n_scaf, dump_every, misFile):
 
-	### get number of misbinding levels
-	nmisBond = int((np.max(hyb_status_allSim[:,:,:n_scaf])-1)*100)
+	### get misbinding energies
+	Us_mis = utils.readMis(misFile)[1]
+	nmisBond = len(Us_mis)
 
 	### calculate free staple concentrations
 	nsim = hyb_status_allSim.shape[0]
@@ -178,14 +208,27 @@ def plotNmis(hyb_status_allSim, n_scaf, dump_every):
 
 	### plot
 	ars.magicPlot()
-	plt.figure("Mis",figsize=(8,6))
+	plt.figure("nMis")
 	for m in range(nmisBond):
-		plt.plot(time,n_hyb_avg[m], label=f'Level {m+1}')
+		plt.plot(time,n_hyb_avg[m], label=f'$U = {Us_mis[m]:0.2f}$')
 		plt.fill_between(time,n_hyb_avg[m]-n_hyb_sem[m],n_hyb_avg[m]+n_hyb_sem[m],alpha=0.3)
 	plt.xlabel("Time [s]")
-	plt.ylabel("N\\textsubscript{hyb}")
+	plt.ylabel("N\\textsubscript{mis}")
 	plt.title("Number of Scaffold Misbonds")
 	plt.legend()
+
+
+################################################################################
+### File Handlers
+
+def readConn(connFile):
+	ars.testFileExist(connFile, "connectivity")
+	with open(connFile, 'rb') as f:
+		params = pickle.load(f)[0]
+	strands = params['strands']
+	n_scaf = params['n_scaf']
+	nbead = params['nbead']
+	return strands, n_scaf, nbead
 
 
 ### run the script

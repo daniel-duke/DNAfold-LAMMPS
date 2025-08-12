@@ -33,14 +33,13 @@ import os
   # including misbinding with either energy function or position optimization.
 
 # Immediate To Do
-# sequence dependent hybridization
 # enumerate all templates for misbinding
+# sequence dependent hybridization
 
 # To Do
 # find optimal tradeoff between commuication cutoff and bond break, parameterize
   # 90 degree angular potential, reactions that shortens crossover bond length, 
-  # make bridge accurate for multiple staple copies, figure out why bridging
-  # reaction doesn't always apply (likely related to faulty nhyb calculation)
+  # figure out bridging reactions
 
 
 ################################################################################
@@ -55,23 +54,23 @@ def main():
 	if useMyFiles:
 
 		### chose design
-		desID = "bridge"			# design identification
+		desID = "coop_Lnone"			# design identification
 		simTag = ""					# added to desID to get name of simulation folder
 		simType = "experiment"		# where create simulation folder
 		rstapTag = None				# tag for reserved staples file (None for not reserving staples)
 		confTag = None				# if starting bound, tag for oxDNA configuration file (None for caDNAno positions)
-		rseed = 2					# random seed for positions and LAMMPS (also used for naming simulation folder)
+		rseed = 1					# random seed for positions and LAMMPS (also used for naming simulation folder)
 		rseed_mis = 1				# random seed for misbinding
 
 		### choose parameters
-		nstep			= 1E6		# steps		- number of simulation steps
-		nstep_relax		= 1E5		# steps		- number of steps for relaxation
-		dump_every		= 1E4		# steps		- number of steps between positions dumps
-		dbox			= 20		# nm		- periodic boundary diameter
+		nstep			= 1E8		# steps		- number of simulation steps
+		nstep_relax		= 1E6		# steps		- number of steps for relaxation
+		dump_every		= 1E5		# steps		- number of steps between positions dumps
+		dbox			= 100		# nm		- periodic boundary diameter
 		stap_copies		= 1 		# int		- number of copies for each staples
-		circularScaf	= False		# bool		- whether the scaffold is circular
+		circularScaf	= True		# bool		- whether the scaffold is circular
 		forceBind		= False		# bool		- whether to force hybridization
-		startBound		= True		# bool		- whether to start at caDNAno positions
+		startBound		= False		# bool		- whether to start at caDNAno positions
 		nmisBond		= 0			# int		- number of misbinding levels (0 for no misbinding)
 
 		### get input files
@@ -144,12 +143,12 @@ def main():
 	### write react files
 	nreact_bondHyb = writeReactHybBond(outReactFold, mis_d2_cuts, p)
 	nreact_bondMis = writeReactMisBond(outReactFold, mis_d2_cuts, p)
-	bridgeEnds, nreact_unbridge = writeReactBridge(outReactFold, backbone_neighbors, complements, is_crossover, p)
 	nreact_angleAct = writeReactAngleAct(outReactFold, backbone_neighbors, complements, is_crossover, p)
-	nreact_angleDeact = writeReactAngleDeact(outReactFold, bridgeEnds, backbone_neighbors, complements, is_crossover, p)
+	nreact_angleDeact = writeReactAngleDeact(outReactFold, backbone_neighbors, complements, is_crossover, p)
+	nreact_bridge, nreact_unbridge = writeReactBridge(outReactFold, backbone_neighbors, complements, is_crossover, p)
 
 	### write lammps input file
-	writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_angleAct, nreact_angleDeact, bridgeEnds, nreact_unbridge, p)
+	writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_angleAct, nreact_angleDeact, nreact_bridge, nreact_unbridge, p)
 
 
 ################################################################################
@@ -184,8 +183,9 @@ def readInput(inFile=None, rseed=1, rseed_mis=1, cadFile=None, rstapFile=None, o
 		'ncompFactor':		2,				# int			- number of complementary factors (set to 1 if no misbinding)
 		'optCompFactors': 	False,			# bool			- whether to optimize complementary factors for misbinding
 		'optCompEfunc': 	False,			# bool			- whether to optimize energy function for misbinding
-		'dehyb': 			False,			# bool			- whether to include dehybridization reactions
-		'debug': 			True,			# bool			- whether to include debugging output
+		'bridgeEnds':		False,			# bool			- whether to include end bridging reactions (if applicable)
+		'dehyb': 			True,			# bool			- whether to include dehybridization reactions
+		'debug': 			False,			# bool			- whether to include debugging output
 		'T':				300,			# K				- temperature
 		'T_relax':			600,			# K				- temperature for relaxation
 		'r_h_bead':			1.28,			# nm			- hydrodynamic radius of single bead
@@ -221,6 +221,7 @@ def readInput(inFile=None, rseed=1, rseed_mis=1, cadFile=None, rstapFile=None, o
 		'ncompFactor':		int,
 		'optCompFactors':	lambda x: x.lower() == 'true',
 		'optCompEfunc':		lambda x: x.lower() == 'true',
+		'bridgeEnds':		lambda x: x.lower() == 'true',
 		'dehyb':			lambda x: x.lower() == 'true',
 		'debug':			lambda x: x.lower() == 'true',
 		'T':				float,
@@ -418,10 +419,10 @@ def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossove
 				bonds = np.append(bonds,[[type,atom1,atom2]],axis=0)
 				charges[complements[bi]] = 2
 
-	### count angles
+	### angles
 	nangle = 0
 	for bi in range(p.n_scaf):
-		bi_5p,bi_3p = getAssembledNeighbors(bi,backbone_neighbors,complements)
+		bi_5p,bi_3p = getAssembledNeighbors(bi, backbone_neighbors, complements, p)
 		if bi_5p != -1 and bi_3p != -1:
 			if complements[bi_5p] != -1 and complements[bi] != -1 and complements[bi_3p] != -1:
 				nangle += 1
@@ -502,7 +503,7 @@ def writeMisbinding(outMisFile, mis_d2_cuts, p):
 
 
 ### write input file for lammps
-def writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_angleAct, nreact_angleDeact, bridgeEnds, nreact_unbridge, p):
+def writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_angleAct, nreact_angleDeact, nreact_bridge, nreact_unbridge, p):
 	print("Writing input file...")
 
 	### computational parameters
@@ -649,7 +650,7 @@ def writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_
 		   f"molecule        angleDeact{ri+1}_mol react/angleDeact{ri+1}_mol.txt\n")
 
 		### bridge templates
-		if bridgeEnds: f.write(
+		for ri in range(nreact_bridge): f.write(
 		   f"molecule        bridge_mol_bondNo react/bridge_mol_bondNo.txt\n"
 		   f"molecule        bridge_mol_bondYa react/bridge_mol_bondYa.txt\n")
 
@@ -687,7 +688,7 @@ def writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_
 		   f" &\n                react angleDeact{ri+1} all {int(react_every_angleDeact)} {p.r12_cut_hyb:.1f} {comm_cutoff} angleDeact{ri+1}_mol angleDeact{ri+1}_mol react/angleDeact{ri+1}_map.txt custom_charges 1")
 
 		### bridge making reaction
-		if bridgeEnds: f.write(
+		for ri in range(nreact_bridge): f.write(
 		   f" &\n                react bridge all {int(react_every_bondHyb)} 0.0 {r12_cut_react_bridge:.2f} bridge_mol_bondNo bridge_mol_bondYa react/bridge_map.txt custom_charges 3")
 
 		### bridge breaking reactions
@@ -1040,7 +1041,7 @@ def writeReactAngleAct(outReactFold, backbone_neighbors, complements, is_crossov
 	for bi in range(p.n_scaf):
 
 		### get neighbors to central bead
-		bi_5p,bi_3p = getAssembledNeighbors(bi,backbone_neighbors,complements)
+		bi_5p,bi_3p = getAssembledNeighbors(bi, backbone_neighbors, complements, p)
 
 		### skip if core scaffold is not present
 		if bi_5p == -1 or bi_3p == -1:
@@ -1070,7 +1071,7 @@ def writeReactAngleAct(outReactFold, backbone_neighbors, complements, is_crossov
 			edges_5to3 = [ cC, aC ]
 
 			### add scaffold 5' side topology
-			a_5p = getAssembledNeighbors(a, backbone_neighbors, complements)[0]
+			a_5p = getAssembledNeighbors(a, backbone_neighbors, complements, p)[0]
 			if a_5p != -1:
 				if backbone_neighbors[a][0] != -1 or options[0]:
 					atoms_5to3.append([0,-1,a_5p])
@@ -1079,7 +1080,7 @@ def writeReactAngleAct(outReactFold, backbone_neighbors, complements, is_crossov
 					edges_5to3.append(a_5p)
 
 			### add scaffold 3' side topology
-			c_3p = getAssembledNeighbors(c, backbone_neighbors, complements)[1]
+			c_3p = getAssembledNeighbors(c, backbone_neighbors, complements, p)[1]
 			if c_3p != -1:
 				if backbone_neighbors[c][1] != -1 or options[0]:
 					atoms_5to3.append([0,-1,c_3p])
@@ -1136,7 +1137,7 @@ def writeReactAngleAct(outReactFold, backbone_neighbors, complements, is_crossov
 			edges_3to5 = [ cC, aC ]
 
 			### add scaffold 3' side topology
-			a_3p = getAssembledNeighbors(a, backbone_neighbors, complements)[1]
+			a_3p = getAssembledNeighbors(a, backbone_neighbors, complements, p)[1]
 			if a_3p != -1:
 				if backbone_neighbors[a][1] != -1 or options[0]:
 					atoms_3to5.append([0,-1,a_3p])
@@ -1145,7 +1146,7 @@ def writeReactAngleAct(outReactFold, backbone_neighbors, complements, is_crossov
 					edges_3to5.append(a_3p)
 
 			### add scaffold 5' side topology
-			c_5p = getAssembledNeighbors(c, backbone_neighbors, complements)[0]
+			c_5p = getAssembledNeighbors(c, backbone_neighbors, complements, p)[0]
 			if c_5p != -1:
 				if backbone_neighbors[c][0] != -1 or options[0]:
 					atoms_3to5.append([0,-1,c_5p])
@@ -1370,12 +1371,17 @@ def writeReactAngleAct(outReactFold, backbone_neighbors, complements, is_crossov
 
 
 ### write reaction files for angle deactivation
-def writeReactAngleDeact(outReactFold, bridgeEnds, backbone_neighbors, complements, is_crossover, p):
+def writeReactAngleDeact(outReactFold, backbone_neighbors, complements, is_crossover, p):
 	print("Writing angle deactivation react files...")
 
 	### only necessary if including dehybridization
 	if not p.dehyb:
 		return 0
+
+	### determine if there are end bridging reactions
+	bridgeEndsReact = True
+	if p.circularScaf or getAssembledNeighbors(0, backbone_neighbors, complements, p)[0] == -1:
+		bridgeEndsReact = False
 
 	### template description
 	# central scaffold, central staple, flanking scaffolds
@@ -1470,7 +1476,7 @@ def writeReactAngleDeact(outReactFold, bridgeEnds, backbone_neighbors, complemen
 		nedge = len(edges)
 
 		### count constrains
-		ncons = 5 if bridgeEnds else 3
+		ncons = 5 if bridgeEndsReact else 3
 
 		#-------- angle deactivation (circular scaffold) reaction map --------#
 
@@ -1499,7 +1505,7 @@ def writeReactAngleDeact(outReactFold, bridgeEnds, backbone_neighbors, complemen
 							 f"round(rxnsum(v_varQ,4)) == {atoms[3][1]+3}\"\n")		# ensure right angle type
 
 			### avoid ends when appropriate
-			if bridgeEnds:
+			if bridgeEndsReact:
 				f.write(f"custom \"round(rxnsum(v_varID,2)) != {p.n_scaf}\"\n")
 				f.write(f"custom \"round(rxnsum(v_varID,2)) != 1\"\n")
 		
@@ -1601,9 +1607,6 @@ def writeReactAngleDeact(outReactFold, bridgeEnds, backbone_neighbors, complemen
 def writeReactBridge(outReactFold, backbone_neighbors, complements, is_crossover, p):
 	print("Writing bridging react files...")
 
-	### currently does not work
-	return False, 0
-
 	### template description
 	# central scaffold (5' end), central staple, flanking scaffold (3' end), flanking scaffold
 	# initiated by central scaffold (5' end) and flanking scaffold (3' end)
@@ -1615,8 +1618,8 @@ def writeReactBridge(outReactFold, backbone_neighbors, complements, is_crossover
 	# 3 - flanking scaffolds and staples, used to: set angle and hyb status with custom charges
 
 	### determine if scaffold ends (if they exist) are bridged
-	if p.circularScaf or getAssembledNeighbors(0,backbone_neighbors,complements)[0] == -1:
-		return False, 0
+	if p.circularScaf or getAssembledNeighbors(0, backbone_neighbors, complements, p)[0] == -1:
+		return 0, 0
 
 	### warning if no dehybridization
 	if not p.dehyb:
@@ -1686,7 +1689,7 @@ def writeReactBridge(outReactFold, backbone_neighbors, complements, is_crossover
 
 	### no unbiridging if no dehybridization
 	if not p.dehyb:
-		return True, 0
+		return 1, 0
 
 	### template description
 	# central scaffold (end 1), central staple, flanking scaffold (end 2), flanking scaffold
@@ -1806,8 +1809,8 @@ def writeReactBridge(outReactFold, backbone_neighbors, complements, is_crossover
 
 		#-------- end map --------#
 
-	### return bridging boolean and unbridging reaction count
-	return True, nreact_unbridge
+	### retrun reaction counts
+	return 1, nreact_unbridge
 
 
 ### write molecule template file
@@ -2246,25 +2249,28 @@ def unzip3(zipped):
 
 
 ### return 5' and 3' neighbors, accounting for bridging bonds
-def getAssembledNeighbors(bi, backbone_neighbors, complements):
+def getAssembledNeighbors(bi, backbone_neighbors, complements, p):
 
 	### for vast majority of cases, this is the result
 	bi_5p = backbone_neighbors[bi][0]
 	bi_3p = backbone_neighbors[bi][1]
 
-	### check for bridging bond on 5' side
-	if bi_5p == -1:
-		if complements[bi] != -1:
-			if backbone_neighbors[complements[bi]][1] != -1:
-				if complements[backbone_neighbors[complements[bi]][1]] != -1:
-					bi_5p = complements[backbone_neighbors[complements[bi]][1]]
+	### only if attempting end bridging reactions
+	if p.bridgeEnds:
 
-	### check for bridging bond on 3' side
-	if bi_3p == -1:
-		if complements[bi] != -1:
-			if backbone_neighbors[complements[bi]][0] != -1:
-				if complements[backbone_neighbors[complements[bi]][0]] != -1:
-					bi_3p = complements[backbone_neighbors[complements[bi]][0]]
+		### check for bridging bond on 5' side
+		if bi_5p == -1:
+			if complements[bi] != -1:
+				if backbone_neighbors[complements[bi]][1] != -1:
+					if complements[backbone_neighbors[complements[bi]][1]] != -1:
+						bi_5p = complements[backbone_neighbors[complements[bi]][1]]
+
+		### check for bridging bond on 3' side
+		if bi_3p == -1:
+			if complements[bi] != -1:
+				if backbone_neighbors[complements[bi]][0] != -1:
+					if complements[backbone_neighbors[complements[bi]][0]] != -1:
+						bi_3p = complements[backbone_neighbors[complements[bi]][0]]
 
 	### return result
 	return bi_5p,bi_3p
