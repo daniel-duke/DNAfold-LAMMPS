@@ -8,25 +8,15 @@ import pickle
 import sys
 
 ## Description
-# this script reads the geometry and trajectory of a dnafold_lmp simulations
-  # and performs various useful analyses, namely trajectory centering and first
-  # bind times.
-# all indexing starts at 1 (atom indices, strand indices, etc); this may seem
-  # like a poor choice given this code is in python, but it makes printing
-  # geometries and atom dumps much easier.
-
-## File Descriptions
-# geometry:
-  # 3 atom types - (1) scaffold, (2) staple, (3) dummy
-  # 3 bond types - (1) backbone, (2) hybridization, (3) dummy
-  # 4 angle types - (1) off 180, (2) off 90, (3) on 180, (4) on 90
-  # columns - (1) atom index, (2) strand index, (3) scaf/stap/dummy type, (4) charge, (5-7) position
-# geometry_vis:
-  # nstrand atom types - (1-nstrand) strand index
-  # 1 bond type - (1) backbone
-  # columns - (1) atom index, (2) zero, (3) strand index, (4-6) position
-# trajectory:
-  # columns - (1) atom index, (2) strand index, (3-5) scaled position
+# this script reads the geometry and trajectory of one or more simulations
+  # and performs various useful analyses, namely trajectory centering and 
+  # hybridization status calculation.
+# all identity and connectivity information (strands, bonds, complements), comes
+  # from the geometry file, whereas all dimensional information (positions, dbox)
+  # comes from the trajectory file
+# both atom indexing and strand indexing start at 1 (not 0), which may seem
+  # like a poor choice given this python code, but it makes printing geometries
+  # and atom dumps much easier.
 
 
 ################################################################################
@@ -39,6 +29,8 @@ def main():
 	parser.add_argument('--copiesFile',		type=str,	default=None,	help='name of copies file, which contains a list of simulation folders')	
 	parser.add_argument('--simFold',		type=str,	default=None,	help='name of simulation folder, should exist within current directory')
 	parser.add_argument('--rseed',			type=int,	default=1,		help='random seed, used to find simFold if necessary')
+	parser.add_argument('--geoFileName',	type=str,	default=None,	help='name of geometry file (default to geometry.in)')
+	parser.add_argument('--datFileName',	type=str,	default=None,	help='name of trajectory file (default to trajectory.dat)')
 	parser.add_argument('--nstep_skip',		type=float,	default=0,		help='number of recorded initial steps to skip')
 	parser.add_argument('--nstep_max',		type=float,	default=0,		help='max number of recorded steps to use (0 for all)')
 	parser.add_argument('--coarse_time',	type=int,	default=1,		help='coarse factor for time steps')
@@ -46,8 +38,8 @@ def main():
 
 	### analysis options
 	center = 1						# what to place at center
-	unwrap = 1						# whether to unwrap by strands at boundary
-	set_color = 0					# whether to set the colors
+	unwrap = True					# whether to unwrap by strands at boundary
+	set_color = False				# whether to set the colors
 	bicolor = True					# whether to use only 2 colors (scaf and stap)
 	r12_cut_hyb = 2					# hybridization potential cutoff radius
 
@@ -56,6 +48,8 @@ def main():
 	copiesFile = args.copiesFile
 	simFold = args.simFold
 	rseed = args.rseed
+	geoFileName = args.geoFileName
+	datFileName = args.datFileName
 	nstep_skip = int(args.nstep_skip)
 	nstep_max = int(args.nstep_max)
 	coarse_time = args.coarse_time
@@ -63,7 +57,11 @@ def main():
 
 	### interpret input
 	if nstep_max == 0:
-		nstep_max = "all"
+		nstep_max = 'all'
+	if geoFileName is None:
+		geoFileName = "geometry.in"
+	if datFileName is None:
+		datFileName = "trajectory.dat"
 
 
 ################################################################################
@@ -72,8 +70,8 @@ def main():
 	### get simulation folders
 	simFolds, nsim = utils.getSimFolds(copiesFile, simFold, rseed)
 
-	### get connectivity vars
-	geoFile = simFolds[0] + "geometry.in"
+	### read geometry
+	geoFile = simFolds[0] + geoFileName
 	strands, bonds_backbone, complements, compFactors, n_scaf, nbead, circularScaf = processGeo(geoFile)
 
 	### write conectivity vars
@@ -84,7 +82,7 @@ def main():
 	### assemble data params
 	params = []
 	for i in range(nsim):
-		params.append((simFolds[i], misFile, strands, bonds_backbone, complements, compFactors, nstep_skip, nstep_max, coarse_time, center, unwrap, set_color, bicolor, r12_cut_hyb))
+		params.append((simFolds[i], datFileName, misFile, strands, bonds_backbone, complements, compFactors, nstep_skip, nstep_max, coarse_time, center, unwrap, set_color, bicolor, r12_cut_hyb))
 
 	### run in parallel if multiple simulations
 	if nsim == 1:
@@ -96,10 +94,7 @@ def main():
 
 
 ### body of main function
-def submain(simFold, misFile, strands, bonds_backbone, complements, compFactors, nstep_skip, nstep_max, coarse_time, center, unwrap, set_color, bicolor, r12_cut_hyb):
-
-	### input files
-	datFile = simFold + "trajectory.dat"
+def submain(simFold, datFileName, misFile, strands, bonds_backbone, complements, compFactors, nstep_skip, nstep_max, coarse_time, center, unwrap, set_color, bicolor, r12_cut_hyb):
 
 	### output files
 	outFold = simFold + "analysis/"
@@ -110,15 +105,18 @@ def submain(simFold, misFile, strands, bonds_backbone, complements, compFactors,
 	### create analysis folder
 	ars.createSafeFold(outFold)
 
-	### trajectory centering
-	points, strands, dbox = ars.readAtomDump(datFile, nstep_skip, coarse_time, nstep_max=nstep_max);
+	### read trajectory
+	datFile = simFold + datFileName
+	points, _, dbox = ars.readAtomDump(datFile, nstep_skip, coarse_time, nstep_max=nstep_max);
 	dump_every = ars.getDumpEvery(datFile)*coarse_time
+
+	### manipulate trajectory
 	points_centered = ars.centerPointsMolecule(points, strands, dbox, center, unwrap)
 	colors = np.minimum(2,strands) if bicolor else strands
 
-	### write complete trajectories
-	writeAtomDump(outDatFile, dbox, points_centered, colors, set_color, dump_every)
+	### write geometry and trajectory
 	ars.writeGeo(outGeoVisFile, dbox, points[0], strands, colors, bonds_backbone)
+	writeAtomDump(outDatFile, dbox, points_centered, colors, set_color, dump_every)
 
 	### hybridization analysis
 	n_scaf = sum(strands==1)
@@ -138,14 +136,14 @@ def processGeo(geoFile):
 	### bead numbers and trimming
 	n_scaf = sum(types==1)
 	nbead = len(types)-1
-	strands = molecules[:-1]
-	compFactors = extras[:-1]
+	strands = molecules[:nbead]
+	compFactors = extras[:nbead]
 
 	### calculate complements
 	complements = getComplements(extras, n_scaf, nbead)
 
 	### analyze bonds
-	bonds_backbone = bonds[ (bonds[:,0]!=2) & (bonds[:,1]<=nbead) & (bonds[:,2]<=nbead) ]
+	bonds_backbone = bonds[ (bonds[:,0]==1) | (bonds[:,0]==3) ]
 	circularScaf = True if np.sum(bonds_backbone[:,1]<=n_scaf)==n_scaf else False
 
 	### return results
@@ -163,7 +161,7 @@ def writeConn(outConnFile, strands, bonds_backbone, complements, compFactors, n_
 	params['nbead'] = nbead
 	params['circularScaf'] = circularScaf
 	with open(outConnFile, 'wb') as f:
-		pickle.dump([params], f)
+		pickle.dump(params, f)
 
 
 ### write lammps-style atom dump

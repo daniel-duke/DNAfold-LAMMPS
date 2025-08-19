@@ -13,9 +13,9 @@ import pickle
 import sys
 
 ## Description
-# this script reads either a caDNAno file or oxDNA configuration file to
-  # get the positions for a DNA origami design, then it writes the lammps-
-  # style geometry and ovito session state files for visualization.
+# this script reads a caDNAno file (and optionally an oxDNA configuration
+  # file) to get the positions for a DNA origami design, then it writes
+  # geometry and ovito session state files for visualization.
 
 
 ################################################################################
@@ -30,7 +30,7 @@ def main():
 	if useMyFiles:
 
 		### chose design
-		desID = "coop_Lnone"	# design identificaiton
+		desID = "2HBx4"			# design identificaiton
 		confTag = None			# if using oxdna position, tag for configuration file (None for caDNAno positions)
 		rstapTag = None			# if reserving staples, tag for reserved staples file (None for all staples)
 		circularScaf = True		# whether to add bond between scaffold ends

@@ -1,6 +1,7 @@
 import armament as ars
 from scipy import stats
 import numpy as np
+import pickle
 import json
 import sys
 
@@ -70,7 +71,11 @@ def readMis(misFile):
 
 
 ### read hybridization status file
-def readHybStatus(hybFile, nstep_skip=0, coarse_time=1, nstep_max="all"):
+def readHybStatus(hybFile, nstep_skip=0, coarse_time=1, nstep_max='all', mis_status='none'):
+
+	### notes
+	# misbinding status describes how to handle misbonds, specifically whether to count them as 
+	  # nothing (none, set to 0), hybridizations (hyb, set to 1), or misbonds (mis, keep at 1.XX)
 
 	### load hyb status file
 	print("Loading hybridization status...")
@@ -87,16 +92,16 @@ def readHybStatus(hybFile, nstep_skip=0, coarse_time=1, nstep_max="all"):
 	nstep_recorded = int(len(content)/(nbead+1))
 	nstep_trimmed = int((nstep_recorded-nstep_skip-1)/coarse_time)+1
 	if nstep_trimmed <= 0:
-		print("Error: Cannot read hyb status - too much initial time cut off.")
+		print("Error: Cannot read hyb status - too much initial time cut off.\n")
 		sys.exit()
 
 	### interpret input
-	if isinstance(nstep_max, str) and nstep_max == "all":
+	if isinstance(nstep_max, str) and nstep_max == 'all':
 		nstep_used = nstep_trimmed
 	elif isinstance(nstep_max, int):
 		nstep_used = min([nstep_max,nstep_trimmed])
 	else:
-		print("Error: Cannot read hyb status - max number of steps must be \"all\" or integer.")
+		print("Error: Cannot read hyb status - max number of steps must be \"all\" or integer.\n")
 		sys.exit()
 
 	### report step counts
@@ -110,7 +115,16 @@ def readHybStatus(hybFile, nstep_skip=0, coarse_time=1, nstep_max="all"):
 		for j in range(nbead):
 			hyb_status[i,j] = content[(nbead+1)*(nstep_skip+i*coarse_time)+1+j].split()[1]
 
-	### results
+	### adjust misbinding values
+	if mis_status == 'hyb':
+		hyb_status[hyb_status>1] = 1
+	elif mis_status == 'none':
+		hyb_status[hyb_status>1] = 0
+	elif mis_status != 'mis':
+		print("Error: unrecognized misbinding status.")
+		sys.exit()
+
+	### result
 	return hyb_status
 
 
@@ -156,10 +170,37 @@ def setOvitoBasics(pipeline):
 	return pipeline
 
 
+### load array of variables from pickle file
+def unpickle(pklFile, dims=None):
+	ars.testFileExist(pklFile, "pickle")
+	with open(pklFile, 'rb') as f:
+		cucumber = pickle.load(f)
+	if dims is not None:
+		nvar = len(dims)
+		if len(cucumber) != nvar:
+			print("Error: length of pickle file array does not match expected number of variables.\n")
+			sys.exit()
+		for i in range(nvar):
+			if dims[i] == None:
+				continue
+			elif dims[i] == 0:
+				if not ars.isnumber(cucumber[i]):
+					print(f"Error: element {i} of the pickle array does not match the expected data type (number).\n")
+					sys.exit()
+			elif not ars.isarray(cucumber[i]):
+				print(f"Error: element {i} of the pickle array does not match the expected data type (array).\n")
+				sys.exit()
+			elif isinstance(cucumber[i], np.ndarray):
+				if len(cucumber[i].shape) != dims[i]:
+					print(f"Error: element {i} of the pickle array does not have the expected shape ({dims[i]}).")
+					sys.exit()
+	return cucumber
+
+
 ################################################################################
 ### Calculation Managers
 
-### calculate first bind times from hybridization status
+### calculate first bind times of complements from hybridization status
 def calcFirstHybTimes(hyb_status, complements, n_scaf, dump_every):
 	nstep = hyb_status.shape[0]
 	first_hyb_times = np.zeros(n_scaf)
@@ -205,7 +246,7 @@ def calcCrystallinity(points, dbox):
 
 
 ### aligning structures for RMSD
-def kabsch_algorithm(r_real, r_ideal):
+def kabschAlgorithm(r_real, r_ideal):
 
 	# Center both point sets at the origin
 	r_ideal_centered = r_ideal - r_ideal.mean(axis=0)
@@ -240,7 +281,7 @@ def calcMeanStructure(points):
     reference = points[0]
     points_aligned = np.zeros_like(points)
     for i in range(nstep):
-        points_aligned[i] = kabsch_algorithm(points[i], reference)
+        points_aligned[i] = kabschAlgorithm(points[i], reference)
     mean_structure = np.mean(points_aligned, axis=0)
     return mean_structure
 
@@ -250,7 +291,7 @@ def calcRMSD(points, r_ideal):
 	nstep = points.shape[0]
 	RMSD = np.zeros(nstep)
 	for i in range(nstep):
-		points_aligned = kabsch_algorithm(points[i], r_ideal)
+		points_aligned = kabschAlgorithm(points[i], r_ideal)
 		RMSD[i] = np.sqrt(np.mean(np.sum((points_aligned - r_ideal) ** 2, axis=1)))
 	return RMSD
 
@@ -337,7 +378,7 @@ def initPositionsOxDNA(cadFile, topFile, confFile):
 				if strand_ox_to_strand[strand_ox-1] == 1:
 					strand_ox_to_strand[strand_ox-1] = strand
 				elif strand_ox_to_strand[strand_ox-1] != strand:
-					print("Error: conflicting information relating DNAfold strands to oxDNA strands.")
+					print("Error: conflicting information relating DNAfold strands to oxDNA strands.\n")
 
 	### assign staple positions
 	bi = n_scaf
@@ -356,6 +397,12 @@ def initPositionsOxDNA(cadFile, topFile, confFile):
 
 	### results
 	return r, strands
+
+
+### simulation time in seconds
+def getTime(nstep, dump_every, dt=0.01, scale=5200):
+	return np.arange(nstep)*dump_every*dt*scale*1E-9
+
 
 
 ################################################################################
@@ -401,10 +448,10 @@ def buildDNAfoldModel(cadFile):
 	### error message
 	if scaffold[ni_scaffoldArr][0] % 2 == 0:
 		if scaffold[ni_scaffoldArr][1] % nnt_bead != 0:
-			print(f"Error: Scaffold 5' end not located at multiple-of-8 position (vstrand {vstrand}).")
+			print(f"Error: Scaffold 5' end not located at multiple-of-8 position (vstrand {vstrand}).\n")
 			sys.exit()
 	elif scaffold[ni_scaffoldArr][1] % nnt_bead != 7:
-		print(f"Error: Scaffold 5' end not located at multiple-of-8 position (vstrand {vstrand}).")
+		print(f"Error: Scaffold 5' end not located at multiple-of-8 position (vstrand {vstrand}).\n")
 		sys.exit()
 
 	### track along scaffold until 3' end eached
@@ -429,17 +476,17 @@ def buildDNAfoldModel(cadFile):
 
 		### error message
 		elif vstrand != vstrand_prev:
-			print(f"Error: Scaffold crossover not located at nultiple-of-8 position (vstrand {vstrand}).")
+			print(f"Error: Scaffold crossover not located at nultiple-of-8 position (vstrand {vstrand}).\n")
 			sys.exit()
 		vstrand_prev = vstrand
 
 	### error message
 	if scaffold[ni_scaffoldArr][0] % 2 == 0:
 		if scaffold[ni_scaffoldArr][1] % nnt_bead != 7:
-			print(f"Error: Scaffold 3' end not located at multiple-of-8 position (vstrand {vstrand}).")
+			print(f"Error: Scaffold 3' end not located at multiple-of-8 position (vstrand {vstrand}).\n")
 			sys.exit()
 	elif scaffold[ni_scaffoldArr][1] % nnt_bead != 0:
-		print(f"Error: Scaffold 3' end not located at multiple-of-8 position (vstrand {vstrand}).")
+		print(f"Error: Scaffold 3' end not located at multiple-of-8 position (vstrand {vstrand}).\n")
 		sys.exit()
 
 	### loop over staples
@@ -470,10 +517,10 @@ def buildDNAfoldModel(cadFile):
 		### error message
 		if staples[ni_staplesArr][0] % 2 == 0:
 			if staples[ni_staplesArr][1] % nnt_bead != 7:
-				print(f"Error: Staple 5' end not located at multiple-of-8 position (vstrand {vstrand}).")
+				print(f"Error: Staple 5' end not located at multiple-of-8 position (vstrand {vstrand}).\n")
 				sys.exit()
 		elif staples[ni_staplesArr][1] % nnt_bead != 0:
-			print(f"Error: Staple 5' end not located at multiple-of-8 position (vstrand {vstrand}).")
+			print(f"Error: Staple 5' end not located at multiple-of-8 position (vstrand {vstrand}).\n")
 			sys.exit()
 
 		### track along staple until 3' end eached
@@ -504,17 +551,17 @@ def buildDNAfoldModel(cadFile):
 
 				### error message
 				elif vstrand != vstrand_prev:
-					print(f"Error: Staple crossover not located at nultiple-of-8 position (vstrand {vstrand}).")
+					print(f"Error: Staple crossover not located at nultiple-of-8 position (vstrand {vstrand}).\n")
 					sys.exit()
 				vstrand_prev = vstrand
 
 		### error message
 		if staples[ni_staplesArr][0] % 2 == 0:
 			if staples[ni_staplesArr][1] % nnt_bead != 0:
-				print(f"Error: Staple 3' end not located at multiple-of-8 position (vstrand {vstrand}).")
+				print(f"Error: Staple 3' end not located at multiple-of-8 position (vstrand {vstrand}).\n")
 				sys.exit()
 		elif staples[ni_staplesArr][1] % nnt_bead != 7:
-			print(f"Error: Staple 3' end not located at multiple-of-8 position (vstrand {vstrand}).")
+			print(f"Error: Staple 3' end not located at multiple-of-8 position (vstrand {vstrand}).\n")
 			sys.exit()
 
 	### results
@@ -596,7 +643,7 @@ def parseCaDNAno(cadFile):
 
 	### error message
 	if 'fiveP_end_scaf' not in locals():
-		print("Error: Scaffold 5' end not found.")
+		print("Error: Scaffold 5' end not found.\n")
 		sys.exit()
 
 	### results
@@ -611,6 +658,6 @@ def find(strand, index, list):
 			if item[2] == -1 and item[3] == -1 and item[4] == -1 and item[5] == -1:
 				return -1
 			return i
-	print("Error: index not found, try again.")
+	print("Error: index not found, try again.\n")
 	sys.exit()
 

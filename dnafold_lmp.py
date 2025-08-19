@@ -7,6 +7,7 @@ from scipy.optimize import minimize
 from scipy.optimize import differential_evolution
 from scipy.optimize import brentq
 from collections import Counter
+import pickle
 import itertools
 import argparse
 import copy
@@ -19,16 +20,8 @@ import os
   # arrays necessary for the dnafold model, and writes the geometry and input
   # files necessary to simulate the system in lammps.
 # all indexing starts at 0, then is increased by 1 when written to lammps files.
-# reserved staples files list the strand indices of the staples (starting from 2)
-  # to reserve, whereas reserved scaffold files list the scaffold bead indices
-  # (starting from 1) paired to the staples to reserve; the code uses reserved
-  # staple files by default, but it can use reserved scaffold if neccessary.
-# if the angle dehyb frequency is too high, there is a risk of missing some
-  # angle dehybridizations (permenantly); this is because the angle dehyb
-  # templates assume all hyb bonds still exist, so if the hyb bond is broken 
-  # before the angle dehyb can break the angle, the dehyb template will never
-  # apply; this also means the risk also rises if the hyb cutoff is lowered;
-  # the main
+# the strand indexing for a reserved staples file starts at 1, but since the
+  # first strand is always the scaffold, the indexing effectively starts at 2.
 # in addition to the packages listed above, the nupack package is required if
   # including misbinding with either energy function or position optimization.
 
@@ -36,7 +29,7 @@ import os
 # enumerate all templates for misbinding
 # sequence dependent hybridization
 
-# To Do
+# Eventual To Do
 # find optimal tradeoff between commuication cutoff and bond break, parameterize
   # 90 degree angular potential, reactions that shortens crossover bond length, 
   # figure out bridging reactions
@@ -54,7 +47,7 @@ def main():
 	if useMyFiles:
 
 		### chose design
-		desID = "coop_Lnone"			# design identification
+		desID = "2HBx4"				# design identification
 		simTag = ""					# added to desID to get name of simulation folder
 		simType = "experiment"		# where create simulation folder
 		rstapTag = None				# tag for reserved staples file (None for not reserving staples)
@@ -63,10 +56,10 @@ def main():
 		rseed_mis = 1				# random seed for misbinding
 
 		### choose parameters
-		nstep			= 1E8		# steps		- number of simulation steps
-		nstep_relax		= 1E6		# steps		- number of steps for relaxation
-		dump_every		= 1E5		# steps		- number of steps between positions dumps
-		dbox			= 100		# nm		- periodic boundary diameter
+		nstep			= 1E7		# steps		- number of simulation steps
+		nstep_relax		= 1E5		# steps		- number of steps for relaxation
+		dump_every		= 1E4		# steps		- number of steps between positions dumps
+		dbox			= 40		# nm		- periodic boundary diameter
 		stap_copies		= 1 		# int		- number of copies for each staples
 		circularScaf	= True		# bool		- whether the scaffold is circular
 		forceBind		= False		# bool		- whether to force hybridization
@@ -252,16 +245,16 @@ def readInput(inFile=None, rseed=1, rseed_mis=1, cadFile=None, rstapFile=None, o
 				if not line or line.startswith('#'):
 					continue
 				if '=' not in line:
-					print(f"Error: Invalid line in input file: {line}")
+					print(f"Error: Invalid line in input file: {line}.\n")
 					sys.exit()
 				key, value = map(str.strip, line.split('=', 1))
 				if key not in param_defaults:
-					print(f"Error: Unknown parameter: {key}")
+					print(f"Error: Unknown parameter: {key}.\n")
 					sys.exit()
 				try:
 					params[key] = param_types[key](value)
 				except:
-					print(f"Error: Cannot parse value for '{key}': {value}")
+					print(f"Error: Cannot parse value for '{key}': {value}.\n")
 					sys.exit()
 
 	### apply defaults and check for required values
@@ -269,7 +262,7 @@ def readInput(inFile=None, rseed=1, rseed_mis=1, cadFile=None, rstapFile=None, o
 		if key not in params:
 			if default is None:
 				if key not in allow_none_default:
-					print(f"Error: Missing required parameter: {key}")
+					print(f"Error: Missing required parameter: {key}.\n")
 					sys.exit()
 			params[key] = default
 
@@ -621,7 +614,7 @@ def writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_
 		   f"timestep        {p.dt}\n"
 		   f"run             {int(p.nstep_relax)}\n"
 		   f"fix             tstat1 mobile langevin {p.T} {p.T} {1/p.gamma_t:0.4f} {p.rseed}\n"
-		   f"run             {int(p.nstep_relax/10)}\n"
+		   f"run             {int(p.nstep_relax)}\n"
 			"unfix           tstat1\n"
 			"unfix           tstat2\n"
 			"reset_timestep  0\n\n")
@@ -756,7 +749,7 @@ def writeReactHybBond(outReactFold, mis_d2_cuts, p):
 	### template description
 	# central scaffold, complimentary central staple, flanking scaffolds
 	# initiated by central scaffold and staple (0 and 1)
-	# one template always used, second template for linear scaffold ends
+	# one template always used, second template for linear scaffolds
 
 	### fragment description
 	# 1 - central scaffold, used to: (for hyb) ensure complimentarity, (for dehyb) ensure angle deactivation
@@ -1019,9 +1012,10 @@ def writeReactAngleAct(outReactFold, backbone_neighbors, complements, is_crossov
 	debug_angle = False
 
 	### template desciprion
-	# 3 core scaffolds, 3 cone staples, flanking scaffolds, connected staples
+	# 3 core scaffolds, 3 core staples, flanking scaffolds, connected staples
 	# initiated by central scaffold and central staple (2 and 5)
-	# usually many templates
+	# up to 124 templates, usually no more than 80 or so
+	# to catch symmetry, staple bonds always list the core staple first
 
 	### fragment description
 	# 1 - left core scaffold, used to: ensure angle type and status
@@ -1088,37 +1082,41 @@ def writeReactAngleAct(outReactFold, backbone_neighbors, complements, is_crossov
 					angls_5to3.append([int(is_crossover[c]),b,c,c_3p,2])
 					edges_5to3.append(c_3p)
 
+			### initialize symmetric bonds
+			bonds_sym = []
+
 			### add central staple 5' side topology
 			bC_5p = backbone_neighbors[bC][0]
 			if bC_5p != -1:
-				if bC_5p == cC:
+				if [1,1,bC_5p] not in atoms_5to3:
+					atoms_5to3.append([1,-1,bC_5p])
+					edges_5to3.append(bC_5p)
+					bonds_sym.append([0,bC,bC_5p])
+				else:
 					if p.stap_copies > 1 and options[1]:
 						atoms_5to3.append([1,-1,bC_5p+p.n_stap])
 						edges_5to3.append(bC_5p+p.n_stap)
-						bonds_5to3.append([0,bC_5p+p.n_stap,bC])
+						bonds_sym.append([0,bC,bC_5p+p.n_stap])
 					else:
-						bonds_5to3.append([0,cC,bC])
-				else:
-					if [1,-1,bC_5p] not in atoms_5to3:
-						atoms_5to3.append([1,-1,bC_5p])
-						edges_5to3.append(bC_5p)
-					bonds_5to3.append([0,bC_5p,bC])
+						bonds_5to3.append([0,bC,bC_5p])
 
 			### add central staple 3' side topology
 			bC_3p = backbone_neighbors[bC][1]
 			if bC_3p != -1:
-				if bC_3p == aC:
-					if p.stap_copies > 1 and options[2]:
-						atoms_5to3s.append([1,-1,bC_3p+p.n_stap])
-						edges_5to3s.append(bC_3p+p.n_stap)
-						bonds_5to3s.append([0,bC,bC_3p+p.n_stap])
-					else:
-						bonds_5to3.append([0,bC,aC])
+				if [1,1,bC_3p] not in atoms_5to3:
+					atoms_5to3.append([1,-1,bC_3p])
+					edges_5to3.append(bC_3p)
+					bonds_sym.append([0,bC,bC_3p])
 				else:
-					if [1,-1,bC_3p] not in atoms_5to3:
-						atoms_5to3.append([1,-1,bC_3p])
-						edges_5to3.append(bC_3p)
-					bonds_5to3.append([0,bC,bC_3p])
+					if p.stap_copies > 1 and options[2]:
+						atoms_5to3.append([1,-1,bC_3p+p.n_stap])
+						edges_5to3.append(bC_3p+p.n_stap)
+						bonds_sym.append([0,bC,bC_3p+p.n_stap])
+					else:
+						bonds_5to3.append([0,bC,bC_3p])
+
+			### add symmetric bonds
+			bonds_5to3 = bonds_5to3 + bonds_sym
 
 			#-------- working 3' to 5' --------#
 
@@ -1154,37 +1152,41 @@ def writeReactAngleAct(outReactFold, backbone_neighbors, complements, is_crossov
 					angls_3to5.append([int(is_crossover[c]),b,c,c_5p,2])
 					edges_3to5.append(c_5p)
 
+			### initialize symmetric bonds
+			bonds_sym = []
+
 			### add central staple 3' side topology
 			bC_3p = backbone_neighbors[bC][1]
 			if bC_3p != -1:
-				if bC_3p == cC:
+				if [1,1,bC_3p] not in atoms_3to5:
+					atoms_3to5.append([1,-1,bC_3p])
+					edges_3to5.append(bC_3p)
+					bonds_sym.append([0,bC,bC_3p])
+				else:
 					if p.stap_copies > 1 and options[2]:
 						atoms_3to5.append([1,-1,bC_3p+p.n_stap])
 						edges_3to5.append(bC_3p+p.n_stap)
-						bonds_3to5.append([0,bC_3p+p.n_stap,bC])
+						bonds_sym.append([0,bC,bC_3p+p.n_stap])
 					else:
-						bonds_3to5.append([0,cC,bC])
-				else:
-					if [1,-1,bC_3p] not in atoms_3to5:
-						atoms_3to5.append([1,-1,bC_3p])
-						edges_3to5.append(bC_3p)
-					bonds_3to5.append([0,bC_3p,bC])
+						bonds_3to5.append([0,bC,bC_3p])
 
 			### add central staple 5' side topology
 			bC_5p = backbone_neighbors[bC][0]
 			if bC_5p != -1:
-				if bC_5p == aC:
+				if [1,1,bC_5p] not in atoms_3to5:
+					atoms_3to5.append([1,-1,bC_5p])
+					edges_3to5.append(bC_5p)
+					bonds_sym.append([0,bC,bC_5p])
+				else:
 					if p.stap_copies > 1 and options[1]:
 						atoms_3to5.append([1,-1,bC_5p+p.n_stap])
 						edges_3to5.append(bC_5p+p.n_stap)
-						bonds_3to5.append([0,bC,bC_5p+p.n_stap])
+						bonds_sym.append([0,bC,bC_5p+p.n_stap])
 					else:
-						bonds_3to5.append([0,bC,aC])
-				else:
-					if [1,-1,bC_5p] not in atoms_3to5:
-						atoms_3to5.append([1,-1,bC_5p])
-						edges_3to5.append(bC_5p)
-					bonds_3to5.append([0,bC,bC_5p])
+						bonds_3to5.append([0,bC,bC_5p])
+
+			### add symmetric bonds
+			bonds_3to5 = bonds_3to5 + bonds_sym
 
 			#-------- add templates to list --------#
 
@@ -1289,6 +1291,10 @@ def writeReactAngleAct(outReactFold, backbone_neighbors, complements, is_crossov
 				atoms_all,bonds_all,angls_all,edges_all = unzip4(templates)
 
 	#-------- end template loop --------#
+
+	# pklFile = "angleTemplates_triSS_edit.pkl"
+	# with open(pklFile, 'wb') as f:
+	# 	pickle.dump([atoms_all,bonds_all,angls_all,edges_all], f)
 
 	### for nice debug output
 	if debug_angle: print()
@@ -1909,7 +1915,7 @@ def staticSwirl(nbead, amplitude, nperiod, radius, r12_eq, nsubstep):
 		mismatch = np.linalg.norm(r[0]-r[bi]) - r12_eq
 		if bi > 1 and mismatch < 0:
 			if bi < nbead/nperiod:
-				print("Error: Too dense to initiate swirl, try again with larger box.")
+				print("Error: Too dense to initiate swirl, try again with larger box.\n")
 				sys.exit()
 			mismatch += r12_eq*(bi-nbead+1)
 			return r, mismatch
@@ -2024,7 +2030,7 @@ def initPositions(strands, p):
 
 			### give up if too many strand failures
 			if nfail_strand == max_nfail_strand:
-				print("Error: Could not place beads, try again with larger box.")
+				print("Error: Could not place beads, try again with larger box.\n")
 				sys.exit()
 
 	### return positions
@@ -2102,7 +2108,7 @@ def randomStapPositions(r, strands, is_reserved_strand, p):
 
 			### give up if too many strand failures
 			if nfail_strand == max_nfail_strand:
-				print("Error: Could not place beads, try again with larger box.")
+				print("Error: Could not place beads, try again with larger box.\n")
 				sys.exit()
 
 	### return positions
@@ -2283,7 +2289,7 @@ def rbi2obi(rbi, p):
 	elif rbi < p.nbead:
 		return (rbi-p.n_scaf)%p.n_stap + p.n_scaf
 	else:
-		print("Error: Origami bead index not defined for the dummy atom.")
+		print("Error: Origami bead index not defined for the dummy atom.\n")
 
 
 ################################################################################
@@ -2698,10 +2704,10 @@ def buildDNAfoldModel(cadFile, p):
 	### error message
 	if scaffold[ni_scaffoldArr][0] % 2 == 0:
 		if scaffold[ni_scaffoldArr][1] % nnt_bead != 0:
-			print(f"Error: Scaffold 5' end not located at multiple-of-8 position (vstrand {vstrand}).")
+			print(f"Error: Scaffold 5' end not located at multiple-of-8 position (vstrand {vstrand}).\n")
 			sys.exit()
 	elif scaffold[ni_scaffoldArr][1] % nnt_bead != 7:
-		print(f"Error: Scaffold 5' end not located at multiple-of-8 position (vstrand {vstrand}).")
+		print(f"Error: Scaffold 5' end not located at multiple-of-8 position (vstrand {vstrand}).\n")
 		sys.exit()
 
 	### track along scaffold until 3' end eached
@@ -2722,17 +2728,17 @@ def buildDNAfoldModel(cadFile, p):
 
 		### error message
 		elif vstrand != vstrand_prev:
-			print("Error: Scaffold crossover not located at nultiple-of-8 position.")
+			print("Error: Scaffold crossover not located at nultiple-of-8 position.\n")
 			sys.exit()
 		vstrand_prev = vstrand
 
 	### error message
 	if scaffold[ni_scaffoldArr][0] % 2 == 0:
 		if scaffold[ni_scaffoldArr][1] % nnt_bead != 7:
-			print(f"Error: Scaffold 3' end not located at multiple-of-8 position (vstrand {vstrand}).")
+			print(f"Error: Scaffold 3' end not located at multiple-of-8 position (vstrand {vstrand}).\n")
 			sys.exit()
 	elif scaffold[ni_scaffoldArr][1] % nnt_bead != 0:
-		print(f"Error: Scaffold 3' end not located at multiple-of-8 position (vstrand {vstrand}).")
+		print(f"Error: Scaffold 3' end not located at multiple-of-8 position (vstrand {vstrand}).\n")
 		sys.exit()
 
 	### loop over staples
@@ -2759,10 +2765,10 @@ def buildDNAfoldModel(cadFile, p):
 		### error message
 		if staples[ni_staplesArr][0] % 2 == 0:
 			if staples[ni_staplesArr][1] % nnt_bead != 7:
-				print(f"Error: Staple 5' end not located at multiple-of-8 position (vstrand {vstrand}).")
+				print(f"Error: Staple 5' end not located at multiple-of-8 position (vstrand {vstrand}).\n")
 				sys.exit()
 		elif staples[ni_staplesArr][1] % nnt_bead != 0:
-			print(f"Error: Staple 5' end not located at multiple-of-8 position (vstrand {vstrand}).")
+			print(f"Error: Staple 5' end not located at multiple-of-8 position (vstrand {vstrand}).\n")
 			sys.exit()
 
 		### track along staple until 3' end eached
@@ -2789,7 +2795,7 @@ def buildDNAfoldModel(cadFile, p):
 
 				### error message
 				elif vstrand != vstrand_prev:
-					print(f"Error: Staple crossover not located at nultiple-of-8 position (vstrand {vstrand}).")
+					print(f"Error: Staple crossover not located at nultiple-of-8 position (vstrand {vstrand}).\n")
 					sys.exit()
 				else:
 					vstrand_prev = vstrand
@@ -2797,10 +2803,10 @@ def buildDNAfoldModel(cadFile, p):
 		### error message
 		if staples[ni_staplesArr][0] % 2 == 0:
 			if staples[ni_staplesArr][1] % nnt_bead != 0:
-				print(f"Error: Staple 3' end not located at multiple-of-8 position (vstrand {vstrand}).")
+				print(f"Error: Staple 3' end not located at multiple-of-8 position (vstrand {vstrand}).\n")
 				sys.exit()
 		elif staples[ni_staplesArr][1] % nnt_bead != 7:
-			print(f"Error: Staple 3' end not located at multiple-of-8 position (vstrand {vstrand}).")
+			print(f"Error: Staple 3' end not located at multiple-of-8 position (vstrand {vstrand}).\n")
 			sys.exit()
 
 	### identify crossovers
@@ -2888,7 +2894,7 @@ def parseCaDNAno(cadFile):
 
 	### error message
 	if 'fiveP_end_scaf' not in locals():
-		print("Error: Scaffold 5' end not found.")
+		print("Error: Scaffold 5' end not found.\n")
 		sys.exit()
 	
 	### report
@@ -2903,7 +2909,7 @@ def find(strand, index, list):
 			if item[2] == -1 and item[3] == -1 and item[4] == -1 and item[5] == -1:
 				return -1
 			return i
-	print("Error: Index not found in strand/index list.")
+	print("Error: Index not found in strand/index list.\n")
 	sys.exit()
 
 

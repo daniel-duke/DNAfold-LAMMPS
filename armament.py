@@ -11,7 +11,7 @@ def readAtomDump(datFile, nstep_skip=0, coarse_time=1, bdis='all', coarse_points
 
 	### notes
 	# assumes the bdis array stores the atom indices starting from 1.
-	# assumes the timestep of the second step is the dump frequency.
+	# assumes there are five columns (id, col2, xs, ys, zs)
 	# assumes the box diameter is uniform accross dimensions and does not change.
 
 	### load trajectory file
@@ -28,7 +28,7 @@ def readAtomDump(datFile, nstep_skip=0, coarse_time=1, bdis='all', coarse_points
 	nstep_recorded = int(len(content)/(nbd_total+9))
 	nstep_trimmed = int((nstep_recorded-nstep_skip-1)/coarse_time)+1
 	if nstep_trimmed <= 0:
-		print("Error: Cannot read atom dump - too much initial time cut off.")
+		print("Error: Cannot read atom dump - too much initial time cut off.\n")
 		sys.exit()
 
 	### interpret input
@@ -37,7 +37,7 @@ def readAtomDump(datFile, nstep_skip=0, coarse_time=1, bdis='all', coarse_points
 	elif isinstance(nstep_max, int):
 		nstep_used = min([nstep_max,nstep_trimmed])
 	else:
-		print("Error: Cannot read atom dump - max number of steps must be \"all\" or integer.")
+		print("Error: Cannot read atom dump - max number of steps must be \"all\" or integer.\n")
 		sys.exit()
 
 	### report step counts
@@ -47,16 +47,16 @@ def readAtomDump(datFile, nstep_skip=0, coarse_time=1, bdis='all', coarse_points
 
 	### interpret input
 	if isinstance(bdis, str) and bdis == 'all':
-		bdis = [list( range(1, int(np.ceil(nbd_total/coarse_points))+1) )]
+		bdis = [list(range(1,int(np.ceil(nbd_total/coarse_points))+1))]
 	elif isinstance(bdis, int):
 		bdis = [[bdis]]
 	elif ars.isarray(bdis) and isinstance(bdis[0], int):
 		bdis = [bdis]
-	elif ars.isarray(bdis) and ars.isarray(bdis[0]):
+	elif ars.isarray(bdis) and ars.isarray(bdis[0]) and isinstance(bdis[0][0], int):
 		for i in range(len(bdis)):
 			bdis[i] = bdis[i][::coarse_points]
 	else:
-		print("Error: Cannot read atom dump - bead indices must be \"all\", an int, a 1D int array, or 2D int array.")
+		print("Error: Cannot read atom dump - bead indices must be \"all\", an int, a 1D int array, or 2D int array.\n")
 		sys.exit()
 
 	### count total number of beads to use
@@ -74,7 +74,7 @@ def readAtomDump(datFile, nstep_skip=0, coarse_time=1, bdis='all', coarse_points
 			for j in range(len(bdis[g])):
 				bdi = bdis[g][j]-1
 				if bdi >= nbd_total:
-					print(f"Error: Cannot read atom dump - requested bead index {bdi} exceeds the number of beads in the simulation ({nbd_total}).")
+					print(f"Error: Cannot read atom dump - requested bead index {bdi} exceeds the number of beads in the simulation ({nbd_total}).\n")
 					sys.exit()
 				line = content[(nbd_total+9)*(nstep_skip+i*coarse_time)+9+bdi].split()
 				if i == 0:
@@ -197,7 +197,7 @@ def readGeo(geoFile, **kwargs):
 
 			### throw error
 			else:
-				print("Error: Cannot read geometry - unable to surmise atom style.")
+				print("Error: Cannot read geometry - unable to surmise atom style.\n")
 				sys.exit()
 
 	### get bond information
@@ -230,10 +230,16 @@ def readGeo(geoFile, **kwargs):
 
 	### get bond information
 	if extraLabel is not None:
+		line_index = -1
 		for i in range(len(content)):
 			if len(content[i].split()) > 0 and content[i].split()[0] == extraLabel:
 				line_index = i+2
 				break
+
+		### check if extras were found
+		if line_index == -1:
+			print("Error: extra label not found.\n")
+			sys.exit()
 
 		nextra = len(content[line_index].split())-1
 		extras = np.zeros((natom,nextra))
@@ -247,12 +253,12 @@ def readGeo(geoFile, **kwargs):
 
 	### results
 	if not readCharge:
-		if extraLabel == None:
+		if extraLabel is None:
 			return r, molecules, types, bonds, angles
 		else:
 			return r, molecules, types, bonds, angles, extras
 	else:
-		if extraLabel == None:
+		if extraLabel is None:
 			return r, molecules, types, charges, bonds, angles
 		else:
 			return r, molecules, types, charges, bonds, angles, extras
@@ -338,7 +344,7 @@ def writeGeo(geoFile, dbox3, r, molecules='auto', types='auto', bonds=None, angl
 	if ars.isnumber(dbox3):
 		dbox3 = [dbox3,dbox3,dbox3]
 	elif not ars.isarray(dbox3) or len(dbox3) != 3:
-		print("Flag: Not writing geometry file - dbox3 must be number or 3-element list.")
+		print("Flag: Not writing geometry file - dbox3 must be number or 3-element array.")
 		return
 	if isinstance(molecules, str) and molecules == 'auto':
 		molecules = np.zeros(natom, dtype=int)
@@ -356,40 +362,63 @@ def writeGeo(geoFile, dbox3, r, molecules='auto', types='auto', bonds=None, angl
 		includeCharge = True
 		charges = np.zeros(natom, dtype=int)
 		len_charge = 1
-	else:
+	elif ars.isarray(charges) and len(charges) == natom:
 		includeCharge = True
 		len_charge = len(str(int(max(charges))))
+	else:
+		print("Flag: Not writing geometry file - charges must be \"auto\" or natom-element array.")
+		return
 
 	### inerpret extras
 	if extras is None:
 		includeExtra = False
-	else:
+	elif ars.isarray(extras) and len(extras) == natom:
 		includeExtra = True
+		extras = np.array(extras)
+		if len(extras.shape) == 1:
+			extras = extras.reshape(-1,1)
 		nextra = extras.shape[1]
 		len_extra = [None]*nextra
 		for i in range(nextra):
 			len_extra[i] = len(str(int(max(extras[:,i]))))
+	else:
+		print("Flag: Not writing geometry file - if given, extras must array with natom elements in the first dimension.")
+		return
 
 	### count objects
 	nmolecule = int(max(molecules))
 	nbond = len(bonds)
 	nangle = len(angles)
 
-	### some more input interpretation
+	### interpret input
 	if isinstance(natomType, str) and natomType == 'auto':
 		natomType = int(max(types))
+	elif not isinstance(natomType, int):
+		print("Flag: Not writing geometry file - natomType must be \"auto\" or integer.")
+		return
 	if isinstance(nbondType, str) and nbondType == 'auto':
 		if nbond > 0:
 			nbondType = int(max(bonds[:,0]))
 		else:
 			nbondType = 0
+	elif not isinstance(nbondType, int):
+		print("Flag: Not writing geometry file - nbondType must be \"auto\" or integer.")
+		return
 	if isinstance(nangleType, str) and nangleType == 'auto':
 		if nangle > 0:
 			nangleType = int(max(angles[:,0]))
 		else:
 			nangleType = 0
+	elif not isinstance(nangleType, int):
+		print("Flag: Not writing geometry file - nangleType must be \"auto\" or integer.")
+		return
+
+	### interpret masses
 	if isinstance(masses, str) and masses == 'auto':
 		masses = np.ones(natomType, dtype=int)
+	elif not ars.isarray(masses) or len(masses) != natomType:
+		print("Flag: Not writing geometry file - masses must be \"auto\" or natomType-element array.")
+		return
 
 	### count digits
 	len_natom = len(str(natom))
@@ -525,13 +554,13 @@ def plotHist(A, Alabel=None, title=None, figLabel="Hist", nbin='auto', Alim_bin=
 	if isinstance(Alim_bin, str) and Alim_bin == 'auto':
 		Alim_bin = [ min(A), max(A) ]
 	elif not ars.isarray(Alim_bin) or len(Alim_bin) != 2:
-		print("Flag: Skipping histogram plot - variable limits must be either \"auto\" or 2-element list.")
+		print("Flag: Skipping histogram plot - variable limits must be either \"auto\" or 2-element array.")
 		return
 	if isinstance(Alim_plot, str) and Alim_plot == 'auto':
 		dAbin = (Alim_bin[1]-Alim_bin[0])/nbin
 		Alim_plot = [ Alim_bin[0]-dAbin/2, Alim_bin[1]+dAbin/2 ]
 	elif not ars.isarray(Alim_plot) or len(Alim_plot) != 2:
-		print("Flag: Skipping histogram plot - variable limits must be either \"auto\" or 2-element list.")
+		print("Flag: Skipping histogram plot - variable limits must be either \"auto\" or 2-element array.")
 		return
 
 	### plot histogram
@@ -539,7 +568,7 @@ def plotHist(A, Alabel=None, title=None, figLabel="Hist", nbin='auto', Alim_bin=
 	if plotAsLine == False:
 		plt.hist(A, nbin, weights=weights, range=Alim_bin, density=useDensity, alpha=alpha, edgecolor='black')
 	else:
-		heights, edges = np.histogram(A, nbin, weights=weights, range=Alim_bin, density=True)
+		heights, edges = np.histogram(A, nbin, weights=weights, range=Alim_bin, density=useDensity)
 		edges = edges[:len(edges)-1] + 1/2*(edges[1]-edges[0])
 		plt.plot(edges, heights, color='black')
 	if plotAvgLine:
@@ -577,7 +606,7 @@ def centerPointsMolecule(points, molecules, dboxs, center=1, unwrap=True):
 	if ars.isnumber(dboxs):
 		dboxs = nstep*[dboxs]
 	elif not ars.isarray(dboxs) or len(dboxs) != nstep:
-		print("Error: Cannot center points - dboxs must be number or nstep-element list.")
+		print("Error: Cannot center points - dboxs must be number or nstep-element array.\n")
 		sys.exit()
 
 	### sort points by molecule
@@ -605,7 +634,7 @@ def centerPointsMolecule(points, molecules, dboxs, center=1, unwrap=True):
 		elif isinstance(center, int) and center <= nmolecule:
 			com = molecule_coms[center-1,:]
 		else:
-			print("Error: Cannot center points - center must be either \"none\", \"com_points\", \"com_molecules\", or integer <= nmolecule.")
+			print("Error: Cannot center points - center must be either \"none\", \"com_points\", \"com_molecules\", or integer <= nmolecule.\n")
 			sys.exit()
 
 		### center the points
@@ -684,6 +713,9 @@ def alignPC(r, indices='auto'):
 	### interpret input
 	if isinstance(indices, str) and indices == 'auto':
 		indices = np.arange(len(r))
+	elif not ars.isarray(indices) or not isinstance(indices[0], int):
+		print("Error: indices must be \"auto\" or array of integers.\n")
+		sys.exit()
 
 	### calculate principal components
 	r -= np.mean(r[indices], axis=0)
@@ -750,7 +782,7 @@ def getColor(color):
 	elif color == 'grey':
 		return np.array([153,153,153])
 	else:
-		print("Error: Unknown color.")
+		print("Error: Unknown color.\n")
 		sys.exit()
 
 
