@@ -26,33 +26,30 @@ def main():
 
 	### get arguments
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--copiesFile',		type=str,	default=None,	help='name of copies file, which contains a list of simulation folders')	
-	parser.add_argument('--simFold',		type=str,	default=None,	help='name of simulation folder, should exist within current directory')
-	parser.add_argument('--rseed',			type=int,	default=1,		help='random seed, used to find simFold if necessary')
+	parser.add_argument('--copiesFile',		type=str,	default=None,	help='name of copies file (first column - simulation folder names)')	
+	parser.add_argument('--simFold',		type=str,	default=None,	help='name of simulation folder, used if no copies file, defaults to current folder')
 	parser.add_argument('--geoFileName',	type=str,	default=None,	help='name of geometry file (default to geometry.in)')
 	parser.add_argument('--datFileName',	type=str,	default=None,	help='name of trajectory file (default to trajectory.dat)')
 	parser.add_argument('--nstep_skip',		type=float,	default=0,		help='number of recorded initial steps to skip')
-	parser.add_argument('--nstep_max',		type=float,	default=0,		help='max number of recorded steps to use (0 for all)')
 	parser.add_argument('--coarse_time',	type=int,	default=1,		help='coarse factor for time steps')
+	parser.add_argument('--nstep_max',		type=float,	default=0,		help='max number of recorded steps to use, excluding initial frame (0 for all)')
 	parser.add_argument('--misFile',		type=str,	default=None,	help='name of misbinding file, which contains cutoffs and energies')
 
-	### analysis options
-	center = 1						# what to place at center
+	### analysis parameters
+	center = 1						# what to place at center (1 for scaffold)
 	unwrap = True					# whether to unwrap by strands at boundary
-	set_color = False				# whether to set the colors
 	bicolor = True					# whether to use only 2 colors (scaf and stap)
-	r12_cut_hyb = 2					# hybridization potential cutoff radius
+	r12_cut_hyb = 2.0				# hybridization potential cutoff radius
 
 	### set arguments
 	args = parser.parse_args()
 	copiesFile = args.copiesFile
 	simFold = args.simFold
-	rseed = args.rseed
 	geoFileName = args.geoFileName
 	datFileName = args.datFileName
 	nstep_skip = int(args.nstep_skip)
-	nstep_max = int(args.nstep_max)
 	coarse_time = args.coarse_time
+	nstep_max = int(args.nstep_max)
 	misFile = args.misFile
 
 	### interpret input
@@ -68,7 +65,7 @@ def main():
 ### Heart
 
 	### get simulation folders
-	simFolds, nsim = utils.getSimFolds(copiesFile, simFold, rseed)
+	simFolds, nsim = utils.getSimFolds(copiesFile, simFold)
 
 	### read geometry
 	geoFile = simFolds[0] + geoFileName
@@ -82,7 +79,7 @@ def main():
 	### assemble data params
 	params = []
 	for i in range(nsim):
-		params.append((simFolds[i], datFileName, misFile, strands, bonds_backbone, complements, compFactors, nstep_skip, nstep_max, coarse_time, center, unwrap, set_color, bicolor, r12_cut_hyb))
+		params.append((simFolds[i], datFileName, misFile, strands, bonds_backbone, complements, compFactors, nstep_skip, nstep_max, coarse_time, center, unwrap, bicolor, r12_cut_hyb))
 
 	### run in parallel if multiple simulations
 	if nsim == 1:
@@ -94,7 +91,7 @@ def main():
 
 
 ### body of main function
-def submain(simFold, datFileName, misFile, strands, bonds_backbone, complements, compFactors, nstep_skip, nstep_max, coarse_time, center, unwrap, set_color, bicolor, r12_cut_hyb):
+def submain(simFold, datFileName, misFile, strands, bonds_backbone, complements, compFactors, nstep_skip, nstep_max, coarse_time, center, unwrap, bicolor, r12_cut_hyb):
 
 	### output files
 	outFold = simFold + "analysis/"
@@ -105,23 +102,25 @@ def submain(simFold, datFileName, misFile, strands, bonds_backbone, complements,
 	### create analysis folder
 	ars.createSafeFold(outFold)
 
+	### figure out number of scaffold beads
+	n_scaf = sum(strands==1)
+
 	### read trajectory
 	datFile = simFold + datFileName
-	points, _, dbox = ars.readAtomDump(datFile, nstep_skip, coarse_time, nstep_max=nstep_max);
-	dump_every = ars.getDumpEvery(datFile)*coarse_time
+	if ars.isinteger(nstep_max): nstep_max += 1
+	points, _, dbox, used_every  = ars.readAtomDump(datFile, nstep_skip, coarse_time, nstep_max=nstep_max, getUsedEvery=True)
 
 	### manipulate trajectory
 	points_centered = ars.centerPointsMolecule(points, strands, dbox, center, unwrap)
 	colors = np.minimum(2,strands) if bicolor else strands
 
 	### write geometry and trajectory
-	ars.writeGeo(outGeoVisFile, dbox, points[0], strands, colors, bonds_backbone)
-	writeAtomDump(outDatFile, dbox, points_centered, colors, set_color, dump_every)
+	ars.writeGeo(outGeoVisFile, dbox, points_centered[0], strands, colors, bonds_backbone)
+	writeAtomDump(outDatFile, dbox, points_centered, strands, used_every)
 
 	### hybridization analysis
-	n_scaf = sum(strands==1)
 	hyb_status = calcHybStatus(points, dbox, n_scaf, misFile, complements, compFactors, r12_cut_hyb)
-	writeHybStatus(outHybFile, hyb_status, dump_every)
+	writeHybStatus(outHybFile, hyb_status, used_every)
 
 
 ################################################################################
@@ -142,8 +141,10 @@ def processGeo(geoFile):
 	### calculate complements
 	complements = getComplements(extras, n_scaf, nbead)
 
-	### analyze bonds
+	### get backbone bonds
 	bonds_backbone = bonds[ (bonds[:,0]==1) | (bonds[:,0]==3) ]
+
+	### determine if scaffold is circular
 	circularScaf = True if np.sum(bonds_backbone[:,1]<=n_scaf)==n_scaf else False
 
 	### return results
@@ -165,12 +166,12 @@ def writeConn(outConnFile, strands, bonds_backbone, complements, compFactors, n_
 
 
 ### write lammps-style atom dump
-def writeAtomDump(outDatFile, dbox, points, col2s, set_color, dump_every):
+def writeAtomDump(outDatFile, dbox, points, col2s, dump_every):
 	nstep = points.shape[0]
 	npoint = points.shape[1]
 	len_npoint = len(str(npoint))
 	len_ncol2 = len(str(max(col2s)))
-	len_dbox = len(str(int(dbox)))
+	len_dbox = len(str(int(dbox/2)))
 	with open(outDatFile, 'w') as f:
 		for i in range(nstep):
 			f.write(f"ITEM: TIMESTEP\n{i*dump_every}\n")
@@ -179,16 +180,13 @@ def writeAtomDump(outDatFile, dbox, points, col2s, set_color, dump_every):
 			f.write(f"-{dbox/2:0{len_dbox+3}.2f} {dbox/2:0{len_dbox+3}.2f} xlo xhi\n")
 			f.write(f"-{dbox/2:0{len_dbox+3}.2f} {dbox/2:0{len_dbox+3}.2f} ylo yhi\n")
 			f.write(f"-{dbox/2:0{len_dbox+3}.2f} {dbox/2:0{len_dbox+3}.2f} zlo zhi\n")
-			if set_color:
-				f.write("ITEM: ATOMS id type xs ys zs\n")
-			else:
-				f.write("ITEM: ATOMS id mol xs ys zs\n")
+			f.write("ITEM: ATOMS id mol xs ys zs\n")
 			for j in range(npoint):
 				f.write(f"{j+1:<{len_npoint}} " + \
 						f"{col2s[j]:<{len_ncol2}}  " + \
-						f"{points[i,j,0]/dbox+1/2:10.8f} " + \
-						f"{points[i,j,1]/dbox+1/2:10.8f} " + \
-						f"{points[i,j,2]/dbox+1/2:10.8f}\n")
+						f"{points[i,j,0]/dbox+1/2:11.8f} " + \
+						f"{points[i,j,1]/dbox+1/2:11.8f} " + \
+						f"{points[i,j,2]/dbox+1/2:11.8f}\n")
 
 
 ### write hybridization status file
@@ -245,7 +243,7 @@ def calcHybStatus(points, dbox, n_scaf, misFile, complements, compFactors, r12_c
 
 	### misbinding
 	else:
-		# 1 for hybridized, decimal for level (1.01 for strongest misbond)
+		# 1 for hybridized, decimal for level (1.00 for misbind, 1.01 for strongest misbond, etc...)
 		# 0 for unhybridized
 
 		mis_d2_cuts = utils.readMis(misFile)[0]
@@ -273,3 +271,4 @@ def calcHybStatus(points, dbox, n_scaf, misFile, complements, compFactors, r12_c
 if __name__ == "__main__":
 	main()
 	print()
+

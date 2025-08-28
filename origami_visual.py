@@ -17,6 +17,8 @@ import sys
   # file) to get the positions for a DNA origami design, then it writes
   # geometry and ovito session state files for visualization.
 
+## To Do
+
 
 ################################################################################
 ### Parameters
@@ -24,34 +26,34 @@ import sys
 def main():
 
 	### where to get files
-	useMyFiles = True
+	useDanielFiles = True
 
-	### extract files from local system
-	if useMyFiles:
+	### special code to make Daniel happy
+	if useDanielFiles:
 
 		### chose design
-		desID = "2HBx4"			# design identificaiton
-		confTag = None			# if using oxdna position, tag for configuration file (None for caDNAno positions)
+		desID = "16HB2x2x2"		# design identificaiton
+		confTag = None			# if using oxdna positions, tag for configuration file (None for caDNAno positions)
 		rstapTag = None			# if reserving staples, tag for reserved staples file (None for all staples)
-		circularScaf = True		# whether to add bond between scaffold ends
-		cornerView = False		# whether to view the origami at an angle
+		circularScaf = True		# whether to add backbone bond between scaffold ends
+		hideStap = False		# whether to hide all staples from view, only showing scaffold
+		win_render = 'none'		# what window to render as png (none, front, side_ortho, side_perspec, corner)
 
 		### get input files
 		cadFile = utilsLocal.getCadFile(desID)
 		rstapFile = utilsLocal.getRstapFile(desID, rstapTag) if rstapTag is not None else None
 
 		### determine position source
+		position_src = 'cadnano'
 		if confTag is not None:
-			position_src = "oxdna"
+			position_src = 'oxdna'
 			topFile, confFile = utilsLocal.getOxFiles(desID, confTag)
-		else:
-			position_src = "cadnano"
 
 		### set output folder
 		outFold = utilsLocal.getSimHomeFold(desID)
 
-	### use files in current folder
-	if not useMyFiles:
+	### regular code for the general populace
+	if not useDanielFiles:
 
 		### get arguments
 		parser = argparse.ArgumentParser()
@@ -59,9 +61,10 @@ def main():
 		parser.add_argument('--topFile',		type=str, 	default=None,	help='if using oxdna positions, name of topology file')
 		parser.add_argument('--confFile',		type=str, 	default=None,	help='if using oxdna positions, name of conformation file')
 		parser.add_argument('--rstapFile',		type=str, 	default=None,	help='if reserving staples, name of reserved staples file')
-		parser.add_argument('--circularScaf',	type=int,	default=True,	help='whether to add bond between scaffold ends')
-		parser.add_argument('--cornerView',		type=int,	default=False,	help='whether to view the origami at an angle')
-
+		parser.add_argument('--circularScaf',	type=int,	default=True,	help='whether to add backbone bond between scaffold ends')
+		parser.add_argument('--hideStap',		type=int,	default=False,	help='whether to hide all staples from view, only showing scaffold')
+		parser.add_argument('--win_render',		type=str,	default='none',	help='what window to render (none, front, side_ortho, side_perspec, corner)')
+		
 		### set arguments
 		args = parser.parse_args()
 		cadFile = args.cadFile
@@ -69,13 +72,14 @@ def main():
 		confFile = args.confFile
 		rstapFile = args.rstapFile
 		circularScaf = args.circularScaf
-		cornerView = args.cornerView
+		hideStap = args.hideStap
+		win_render = args.win_render
 
 		### determine position source
 		if topFile is not None and confFile is not None:
-			position_src = "oxdna"
+			position_src = 'oxdna'
 		else:
-			position_src = "cadnano"
+			position_src = 'cadnano'
 			if topFile is not None:
 				print("Flag: oxDNA topology file provided without configuration file, using caDNAno positions.")
 			if confFile is not None:
@@ -94,9 +98,9 @@ def main():
 		reserved_strands = readRstap(rstapFile)
 
 	### get positions
-	if position_src == "cadnano":
+	if position_src == 'cadnano':
 		r, strands = utils.initPositionsCaDNAno(cadFile)
-	if position_src == "oxdna":
+	if position_src == 'oxdna':
 		r, strands = utils.initPositionsOxDNA(cadFile, topFile, confFile)
 
 	### prepare the data for nice redering
@@ -105,18 +109,60 @@ def main():
 	### write geometry
 	ars.createSafeFold(outFold + "analysis")
 	outGeoFile = outFold + "analysis/geometry_ideal.in"
-	ars.writeGeo(outGeoFile, dbox3, r, types=types, bonds=bonds)
+	ars.writeGeo(outGeoFile, dbox3, r, strands, types, bonds)
 
 	### write ovito file
 	ovitoFile = outFold + "analysis/vis_ideal.ovito"
-	writeOvito(ovitoFile, outGeoFile, cornerView)
+	figFile = outFold + "analysis/vis_ideal_" + win_render + ".png"
+	writeOvito(ovitoFile, outGeoFile, figFile, hideStap, win_render)
+
+	### plot chord diagram
+	plot(chords)
+
+
+################################################################################
+### Plotter
+
+def plotChords(strands, complements):
+    nbead = len(strands)
+
+    # Find scaffold beads
+    scaffold_indices = np.where(strands==1)[0]
+    n_scaf = len(scaffold_indices)
+
+    # Positions of scaffold around circle
+    theta = np.linspace(0, 2*np.pi, n_scaf, endpoint=False)
+    x = np.cos(theta)
+    y = np.sin(theta)
+
+    # Prepare plot
+    ars.magicPlot()
+    fig, ax = plt.subplots(figsize=(8,8))
+    ax.set_aspect("equal")
+    ax.axis("off")
+
+    # Draw scaffold beads
+    ax.scatter(x, y, c="black", s=20, zorder=3)
+
+    # Draw backbone connections (staples only)
+    for i in range(nbead - 1):
+        if strands[i] == strands[i+1] and strands[i] != 1:
+            scaf1 = complements[i]
+            scaf2 = complements[i+1]
+
+            if scaf1 in scaffold_indices and scaf2 in scaffold_indices:
+                ax.plot([x[scaffold_indices == scaf1][0],
+                         x[scaffold_indices == scaf2][0]],
+                        [y[scaffold_indices == scaf1][0],
+                         y[scaffold_indices == scaf2][0]],
+                        color="grey", alpha=0.6, linewidth=1.0)
 
 
 ################################################################################
 ### File Handlers
 
 ### write session state vito file that visualizes the geometry
-def writeOvito(ovitoFile, outGeoFile, cornerView):
+def writeOvito(ovitoFile, outGeoFile, figFile, hideStap, win_render):
 
 	### set colors
 	scaf_color = ars.getColor("orchid")
@@ -129,38 +175,47 @@ def writeOvito(ovitoFile, outGeoFile, cornerView):
 	### prepare basic DNAfold scene
 	pipeline = utils.setOvitoBasics(pipeline)
 
-	### set active viewport to corner view
-	if cornerView:
-		viewport = scene.viewports.active_vp
-		viewport.camera_dir = (1,-1,-1)
-		viewport.camera_up = (0,0,1)
-		viewport.zoom_all()
+	### set scaffold and staple particle radii and bond widths (thin scaffold)
+	pipeline.modifiers.append(ComputePropertyModifier(output_property='Radius', expressions=['(ParticleType==1)?0.6:1']))
+	pipeline.modifiers.append(ComputePropertyModifier(operate_on='bonds', output_property='Width', expressions=['(@1.ParticleType==1)?1.2:2']))
 
-	### set scaffold and staple particle radii and bond widths (small scaffold)
-	pipeline.modifiers.append(ComputePropertyModifier(output_property='Radius',expressions=['(ParticleType==1)?0.6:1']))
-	pipeline.modifiers.append(ComputePropertyModifier(operate_on='bonds',output_property='Width',expressions=['(BondType==1)?1.2:2']))
+	### set colors (scaffold color 1, staple color 2)
+	pipeline.modifiers.append(ComputePropertyModifier(output_property='Color', expressions=[f'(ParticleType==1)?{scaf_color[0]}/255:{stap_color[0]}/255', f'(ParticleType==1)?{scaf_color[1]}/255:{stap_color[1]}/255', f'(ParticleType==1)?{scaf_color[2]}/255:{stap_color[2]}/255']))
 
-	### set colors
-	pipeline.modifiers.append(ComputePropertyModifier(output_property='Color',expressions=[f'(ParticleType==1)?{scaf_color[0]}/255:{stap_color[0]}/255',f'(ParticleType==1)?{scaf_color[1]}/255:{stap_color[1]}/255',f'(ParticleType==1)?{scaf_color[2]}/255:{stap_color[2]}/255']))
+	### remove reserved staples
+	pipeline.modifiers.append(ComputePropertyModifier(output_property='Selection', expressions=['ParticleType==3']))
 
-	### remove reserved staples, or all staples
-	pipeline.modifiers.append(ComputePropertyModifier(enabled=False,output_property='Selection',expressions=['ParticleType==3']))
-	pipeline.modifiers.append(ComputePropertyModifier(enabled=False,output_property='Selection',expressions=['ParticleType!=1']))
+	### add option to hide all staples
+	pipeline.modifiers.append(ComputePropertyModifier(enabled=hideStap, output_property='Selection', expressions=['ParticleType!=1']))
 	pipeline.modifiers.append(DeleteSelectedModifier())
+
+	### render chosen viewport
+	if win_render != 'none':
+		if win_render == 'front':
+			viewport = scene.viewports[0]
+		elif win_render == 'side_ortho':
+			viewport = scene.viewports[1]
+		elif win_render == 'side_perspec':
+			viewport = scene.viewports[2]
+		elif win_render == 'corner':
+			viewport = scene.viewports[3]
+		else:
+			print("Error: Unrecognized window selection.\n")
+			sys.exit()
+
+		### save figure
+		viewport.render_image(size=(1600,1200), filename=figFile)
 
 	### write ovito file
 	scene.save(ovitoFile)
 	pipeline.remove_from_scene()
 
 
-################################################################################
-### File Handlers
-
 ### read staple file
 def readRstap(rstapFile):
 
 	### read reserved staples file
-	ars.testFileExist(rstapFile,"reserved staples")
+	ars.testFileExist(rstapFile, "reserved staples")
 	with open(rstapFile, 'r') as f:
 		reserved_strands = [ int(line.strip()) for line in f ]
 

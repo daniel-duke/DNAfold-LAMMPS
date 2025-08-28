@@ -28,6 +28,7 @@ import os
   # quality (for now, either crystallinity or final number of bound staples).
 # this script will only work if "backend_basics.py" has already been run for
   # the given simulation (requires a populated "analysis" folder).
+# misbonds are not counted as hybridizations.
 # the hybridization / product quality correlation (hybCorr) is a rather simple
   # concept when applied to individual beads; however, when extracting a
   # single correlation value for each strand, there are several options.
@@ -38,7 +39,6 @@ import os
   # the correlation is calulated for each component bead, then some
   # "composite" correlation is calculated. This composite value can be either 
   # the average or the max (absolute value) correlation.
-# misbonds are not counted as hybridizations.
 
 
 ################################################################################
@@ -48,45 +48,50 @@ def main():
 
 	### get arguments
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--copiesFile',		type=str,	required=True,		help='name of copies file, which contains a list of simulation folders')	
+	parser.add_argument('--copiesFile',		type=str,	default=None,		help='name of copies file (first column - simulation folder names)')	
 	parser.add_argument('--cadFile',		type=str,	required=True,		help='name of caDNAno file, for initializing positions')
 	parser.add_argument('--topFile',		type=str, 	default=None,		help='if using oxdna positions, name of topology file')
 	parser.add_argument('--confFile',		type=str, 	default=None,		help='if using oxdna positions, name of conformation file')
-	parser.add_argument('--corr_var',		type=str,	default="final_S",	help='what to correlate with the strands (values: final_S, final_nhyb)')
-	parser.add_argument('--corr_type',		type=str,	default="hyb_last",	help='how to average correlation across strand (values: hyb_avg, hyb_first, hyb_last, corr_avg, corr_max')
-	parser.add_argument('--loadResults',	type=int,	default=False,		help='whether to load the results from a pickle file')
 	parser.add_argument('--nstep_skip',		type=float,	default=0,			help='if not loading results, number of recorded initial steps to skip')
 	parser.add_argument('--coarse_time',	type=int,	default=1,			help='if not loading results, coarse factor for time steps')
-	parser.add_argument('--nstep_max',		type=float,	default=0,			help='max number of extracted steps to use (0 for all)')
+	parser.add_argument('--loadResults',	type=int,	default=False,		help='whether to load the results from a pickle file')
+	parser.add_argument('--nstep_max',		type=float,	default=0,			help='max number of extracted steps to use, excluding initial frame (0 for all)')
 	parser.add_argument('--mov_avg_stride',	type=int,	default=1,			help='number of final extracted steps to average for product quality')
-	parser.add_argument('--values_report',	type=str,	default="none",		help='what staple results to report (values: none, staple, corr, all)')
-	parser.add_argument('--useML',			type=int,	default=False,		help='whether to attempt using machine learning to uncover correlations')
+	parser.add_argument('--corr_var',		type=str,	default='final_S',	help='what to correlate with the strands (final_S, final_n_hyb)')
+	parser.add_argument('--corr_type',		type=str,	default='hyb_last',	help='how to average correlation across strand (hyb_avg, hyb_first, hyb_last, corr_avg, corr_max')
+	parser.add_argument('--values_report',	type=str,	default='none',		help='what staple results to report (none, staple, corr, all)')
+	parser.add_argument('--doML',			type=int,	default=False,		help='whether to attempt using machine learning to uncover correlations')
 
 	### set arguments
 	args = parser.parse_args()
-	cadFile = args.cadFile
 	copiesFile = args.copiesFile
+	cadFile = args.cadFile
 	topFile = args.topFile
 	confFile = args.confFile
-	corr_var = args.corr_var
-	corr_type = args.corr_type
-	loadResults = args.loadResults
 	nstep_skip = int(args.nstep_skip)
 	coarse_time = args.coarse_time
+	loadResults = args.loadResults
 	nstep_max = int(args.nstep_max)
 	mov_avg_stride = args.mov_avg_stride
+	corr_var = args.corr_var
+	corr_type = args.corr_type
 	values_report = args.values_report
-	useML = args.useML
+	doML = args.doML
 
-	### check input
+	### check arguments
+	if not loadResults and copiesFile is None:
+		print("Error: copies file required if not loading results.")
+		sys.exit()
 	if topFile is not None and confFile is not None:
-		position_src = "oxdna"
+		position_src = 'oxdna'
 	else:
-		position_src = "cadnano"
+		position_src = 'cadnano'
 		if topFile is not None:
 			print("Flag: oxDNA topology file provided without configuration file, using caDNAno positions.")
 		if confFile is not None:
 			print("Flag: oxDNA configuration file provided without topology file, using caDNAno positions.")
+	if mov_avg_stride == parser.get_default('mov_avg_stride'):
+		print("Flag: Using the default moving average stide (1), which may not be ideal.")
 
 
 ################################################################################
@@ -108,43 +113,43 @@ def main():
 			datFile = simFolds[i] + "analysis/trajectory_centered.dat"
 			nstep_allSim[i] = ars.getNstep(datFile, nstep_skip, coarse_time)
 		nstep_min = int(min(nstep_allSim))
-		nstep_use = nstep_min if nstep_max == 0 else min([nstep_min,nstep_max])
+		nstep_use = nstep_min if nstep_max == 0 else min([nstep_min,nstep_max+1])
 
 		### loop through simulations
 		first_hyb_times_scaled_allSim = np.zeros((nsim,n_scaf))
-		nhyb_frac_allSim = np.zeros((nsim,nstep_use))
+		n_hyb_frac_allSim = np.zeros((nsim,nstep_use))
 		S_allSim = np.zeros((nsim,nstep_use))
 		for i in range(nsim):
 
 			### calculate hyb times
-			hybFile = simFolds[i] + "analysis/hyb_status.dat"
-			hyb_status = utils.readHybStatus(hybFile, nstep_skip, coarse_time, nstep_use, 'none')
-			dump_every = utils.getDumpEveryHyb(hybFile)*coarse_time
-			first_hyb_times_scaled_allSim[i] = utils.calcFirstHybTimes(hyb_status, complements, n_scaf, dump_every)[1]
-			nhyb_frac_allSim[i] = np.sum(hyb_status==1,axis=1)/nbead
+			hybFile = simFolds[i] + "analysis/hyb_status.dat"; print()
+			hyb_status = utils.readHybStatus(hybFile, nstep_skip, coarse_time, nstep_max=nstep_use, n_read=n_scaf)
+			first_hyb_times_scaled_allSim[i] = utils.calcFirstHybTimes(hyb_status, n_scaf)
+			n_hyb_frac_allSim[i] = np.sum(hyb_status==1,axis=1)/n_scaf
+
+			
 
 			### calculate crystallinity
 			datFile = simFolds[i] + "analysis/trajectory_centered.dat"
-			bdis_scaf = list(range(1,n_scaf+1))
-			points, _, dbox = ars.readAtomDump(datFile, nstep_skip, coarse_time, bdis=bdis_scaf, nstep_max=nstep_use); print()
+			points, _, dbox = ars.readAtomDump(datFile, nstep_skip, coarse_time, bdis=-n_scaf, nstep_max=nstep_use)
 			S_allSim[i] = utils.calcCrystallinity(points, dbox)
 
 		### store results
 		resultsFile = "analysis/hyb_correlation_results.pkl"
 		with open(resultsFile, 'wb') as f:
-			pickle.dump([first_hyb_times_scaled_allSim, nhyb_frac_allSim, S_allSim, strands, bonds_backbone, complements, n_scaf], f)
+			pickle.dump([first_hyb_times_scaled_allSim, n_hyb_frac_allSim, S_allSim, strands, bonds_backbone, complements, n_scaf], f)
 
 	### load results
 	else:
 		resultsFile = "analysis/hyb_correlation_results.pkl"
-		cucumber = utils.unpickle(resultsFile, [2,2,2,1,2,2,0])
-		[first_hyb_times_scaled_allSim, nhyb_frac_allSim, S_allSim, strands, bonds_backbone, complements, n_scaf] = cucumber
+		cucumber = ars.unpickle(resultsFile, [2,2,2,1,2,2,0])
+		[first_hyb_times_scaled_allSim, n_hyb_frac_allSim, S_allSim, strands, bonds_backbone, complements, n_scaf] = cucumber
 
 		### trim steps
 		nstep_pkl = S_allSim.shape[1]
-		nstep_use = nstep_pkl if nstep_max == 0 else min([nstep_pkl,nstep_max])
+		nstep_use = nstep_pkl if nstep_max == 0 else min([nstep_pkl,nstep_max+1])
 		first_hyb_times_scaled_allSim = first_hyb_times_scaled_allSim[:,:nstep_use]
-		nhyb_frac_allSim = nhyb_frac_allSim[:,:nstep_use]
+		n_hyb_frac_allSim = n_hyb_frac_allSim[:,:nstep_use]
 		S_allSim = S_allSim[:,:nstep_use]
 
 
@@ -152,21 +157,21 @@ def main():
 ### Results
 
 	### select product quality variable for hybridization correlation
-	if corr_var == "final_nHyb":
-		product_quality = np.mean(nhyb_frac_allSim[:,-mov_avg_stride:],axis=1)
-	elif corr_var == "final_S":
+	if corr_var == 'final_n_hyb':
+		product_quality = np.mean(n_hyb_frac_allSim[:,-mov_avg_stride:],axis=1)
+	elif corr_var == 'final_S':
 		product_quality =  np.mean(S_allSim[:,-mov_avg_stride:],axis=1)
 	else:
-		print("Error: Unknown correlation variable.")
+		print("Error: Unknown correlation variable.\n")
 		sys.exit()
 
 	### calculate and visualize correlation
 	hybCorr, hybCorr_strand, ht_strand = calcHybCorr(first_hyb_times_scaled_allSim, product_quality, strands, complements, corr_type)
 	
 	### prepare position data
-	if position_src == "cadnano":
+	if position_src == 'cadnano':
 		r = utils.initPositionsCaDNAno(cadFile)[0]
-	if position_src == "oxdna":
+	if position_src == 'oxdna':
 		r = utils.initPositionsOxDNA(cadFile, topFile, confFile)[0]
 	r, charges, dbox3 = prepGeoData(r, strands, complements, hybCorr, hybCorr_strand)
 
@@ -177,18 +182,18 @@ def main():
 	writeOvito(ovitoFile, outGeoFile)
 
 	### report correlations
-	if values_report != "none":
+	if values_report != 'none':
 
 		### values
 		staple_labels = np.arange(2,max(strands)+1)
 		sorted_results = sorted(zip(hybCorr_strand[1:],staple_labels), reverse=True)
 		print("\nCorrelation by strand:")
 		for corr, s in sorted_results:
-			if values_report == "staple":
+			if values_report == 'staple':
 				print(f"{s:2.0f}")
-			elif values_report == "corr":
+			elif values_report == 'corr':
 				print(f"{corr:0.4f}")
-			elif values_report == "all":
+			elif values_report == 'all':
 				print(f"Strand {s:2.0f}: {corr:0.4f}")
 			else:
 				print("Error: unknown values to report.\n")
@@ -199,7 +204,7 @@ def main():
 		plt.show()
 
 	### machine learning
-	if useML:
+	if doML:
 		ars.magicPlot()
 		linReg(ht_strand,product_quality)
 		lasso(ht_strand,product_quality)
@@ -247,15 +252,17 @@ def writeOvito(ovitoFile, outGeoFile):
 	### prepare basic DNAfold scene
 	pipeline = utils.setOvitoBasics(pipeline)
 
-	### set scaffold and staple particle radii and bond widths
+	### set scaffold and staple particle radii and bond widths (thin scaffold)
 	pipeline.modifiers.append(ComputePropertyModifier(output_property='Radius', expressions=['(ParticleType==1)?0.6:1']))
 	pipeline.modifiers.append(ComputePropertyModifier(operate_on='bonds', output_property='Width', expressions=['(@1.ParticleType==1)?1.2:2']))
 
-	### set color coding
+	### set color gradient based on charge
 	pipeline.modifiers.append(ColorCodingModifier(property='Charge', start_value=-1, end_value=1, gradient=ColorCodingModifier.BlueWhiteRed()))
+	
+	### set scaffold color to white
 	pipeline.modifiers.append(ComputePropertyModifier(output_property='Color', expressions=['(ParticleType==1)?1:Color.R', '(ParticleType==1)?1:Color.G', '(ParticleType==1)?1:Color.B']))
 
-	### add option to delete staples
+	### add option to hide all staples
 	pipeline.modifiers.append(ComputePropertyModifier(enabled=False, output_property='Selection', expressions=['ParticleType!=1']))
 	pipeline.modifiers.append(DeleteSelectedModifier())
 
@@ -267,6 +274,7 @@ def writeOvito(ovitoFile, outGeoFile):
 ################################################################################
 ### File Handlers
 
+### get connectivity variables
 def readConn(connFile):
 	ars.testFileExist(connFile, "connectivity")
 	with open(connFile, 'rb') as f:
@@ -306,27 +314,27 @@ def calcHybCorr(ht, pq, strands, complements, corr_type):
 			B = ht[:,bi].reshape(nsim,1)
 			ht_grouped[strand-1] = np.concatenate((A,B),axis=1)
 	for si in range(1,nstrand):
-		if corr_type == "hyb_avg":
+		if corr_type == 'hyb_avg':
 			ht_strand[:,si] = np.mean(ht_grouped[si],axis=1)
-		elif corr_type == "hyb_first":
+		elif corr_type == 'hyb_first':
 			ht_strand[:,si] = np.min(ht_grouped[si],axis=1)
-		elif corr_type == "hyb_last":
+		elif corr_type == 'hyb_last':
 			ht_strand[:,si] = np.max(ht_grouped[si],axis=1)
-		if corr_type == "hyb_avg" or corr_type == "hyb_first" or corr_type == "hyb_last":
+		if corr_type == 'hyb_avg' or corr_type == 'hyb_first' or corr_type == 'hyb_last':
 			if len(set(ht_strand[:,si])) != 1:
 				corr_strand[si] = np.corrcoef(ht_strand[:,si],pq)[0,1]
 
 	### group correlation by strands, post-correlation methods
-	if corr_type == "corr_avg" or corr_type == "corr_max":
+	if corr_type == 'corr_avg' or corr_type == 'corr_max':
 		corr_grouped = [ [] for si in range(nstrand) ]
 		corr_grouped[0] = [0]
 		for bi in range(n_scaf):
 			if len(complements[bi]) > 0:
 				strand = strands[complements[bi][0]-1]
 				corr_grouped[strand-1].append(corr[bi])
-		if corr_type == "corr_avg":
+		if corr_type == 'corr_avg':
 			corr_strand = np.array([ np.mean(corr_grouped[si]) for si in range(nstrand) ])
-		elif corr_type == "corr_max":
+		elif corr_type == 'corr_max':
 			for si in range(nstrand):
 				if all(c > 0 for c in corr_grouped[si]):
 					corr_strand[si] = max(corr_grouped[si])
@@ -336,8 +344,8 @@ def calcHybCorr(ht, pq, strands, complements, corr_type):
 					corr_strand[si] = 0
 
 	### error message
-	elif corr_type != "hyb_avg" and corr_type != "hyb_first" and corr_type != "hyb_last":
-		print("Error: Unknown correlation type.")
+	elif corr_type != 'hyb_avg' and corr_type != 'hyb_first' and corr_type != 'hyb_last':
+		print("Error: Unknown correlation type.\n")
 		sys.exit()
 
 	### results
@@ -520,6 +528,7 @@ def prepGeoData(r, strands, complements, hybCorr, hybCorr_strand):
 	### assign charge
 	charges = np.zeros(n_ori)
 	charges[:n_scaf] = hybCorr
+	print(hybCorr)
 	for bi in range(n_scaf,n_ori):
 		charges[bi] = hybCorr_strand[strands[bi]-1]
 

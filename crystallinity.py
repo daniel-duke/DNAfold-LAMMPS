@@ -29,17 +29,16 @@ def main():
 
 	### get arguments
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--copiesFile',		type=str,	default=None,	help='name of copies file, which contains a list of simulation folders')	
-	parser.add_argument('--simFold',		type=str,	default=None,	help='name of simulation folder, should exist within current directory')
-	parser.add_argument('--rseed',			type=int,	default=1,		help='random seed, used to find simFold if necessary')
+	parser.add_argument('--copiesFile',		type=str,	default=None,	help='name of copies file (first column - simulation folder names)')
+	parser.add_argument('--simFold',		type=str,	default=None,	help='name of simulation folder, used if no copies file, defaults to current folder')
 	parser.add_argument('--clusterFile',	type=str,	default=None,	help='name of cluster file, only used for crystallinity')	
-	parser.add_argument('--calcRMSD',		type=int,	default=False,	help='whether to calculate RMSD')		
-	parser.add_argument('--cadFile',		type=str,	default=None,	help='if calculating RMSD, name of caDNAno file')	
-	parser.add_argument('--calcACN',		type=int,	default=False,	help='whether to calculate ACN')		
-	parser.add_argument('--loadResults',	type=int,	default=False,	help='whether to load the results from a pickle file')
 	parser.add_argument('--nstep_skip',		type=float,	default=0,		help='if not loading results, number of recorded initial steps to skip')
 	parser.add_argument('--coarse_time',	type=int,	default=1,		help='if not loading results, coarse factor for time steps')
-	parser.add_argument('--nstep_max',		type=float,	default=0,		help='max number of extracted steps to use (0 for all)')
+	parser.add_argument('--doRMSD',			type=int,	default=False,	help='whether to calculate RMSD')		
+	parser.add_argument('--cadFile',		type=str,	default=None,	help='if calculating RMSD, name of caDNAno file')	
+	parser.add_argument('--doACN',			type=int,	default=False,	help='whether to calculate ACN')		
+	parser.add_argument('--loadResults',	type=int,	default=False,	help='whether to load the results from a pickle file')
+	parser.add_argument('--nstep_max',		type=float,	default=0,		help='max number of extracted steps to use, excluding initial frame (0 for all)')
 	parser.add_argument('--mov_avg_stride',	type=int,	default=1,		help='stride length for moving average')
 	parser.add_argument('--saveFig',		type=int,	default=False,	help='whether to save pdf of figures')
 
@@ -47,31 +46,32 @@ def main():
 	args = parser.parse_args()
 	copiesFile = args.copiesFile
 	simFold = args.simFold
-	rseed = args.rseed
 	clusterFile = args.clusterFile
-	calcRMSD = args.calcRMSD
-	cadFile = args.cadFile
-	calcACN = args.calcACN
-	loadResults = args.loadResults
 	nstep_skip = int(args.nstep_skip)
-	nstep_max = int(args.nstep_max)
 	coarse_time = args.coarse_time
+	doRMSD = args.doRMSD
+	cadFile = args.cadFile
+	doACN = args.doACN
+	loadResults = args.loadResults
+	nstep_max = int(args.nstep_max)
 	mov_avg_stride = args.mov_avg_stride
 	saveFig = args.saveFig
 
 	### check arguments
 	if copiesFile is not None and clusterFile is not None:
 		clusterFile = None
-		print("Flag: Both copies and cluster file provided, so ignoring cluster file.\n")
-	if calcRMSD and cadFile is None:
+		print("Flag: Both copies and cluster file provided, so ignoring cluster file.")
+	if doRMSD and cadFile is None:
 		print("Error: caDNAno file required for RMSD calculation.\n")
 		sys.exit()
-	if calcRMSD and clusterFile is not None:
+	if doRMSD and clusterFile is not None:
 		print("Flag: skipping RMSD calculation, clusters not supported yet.")
-		calcRMSD = False
-	if calcACN and clusterFile is not None:
+		doRMSD = False
+	if doACN and clusterFile is not None:
 		print("Flag: skipping ACN calculation, clusters not supported yet.")
-		calcACN = False
+		doACN = False
+	if mov_avg_stride == parser.get_default('mov_avg_stride'):
+		print("Flag: Using the default moving average stide (1), which may not be ideal.")
 
 
 ################################################################################
@@ -81,16 +81,14 @@ def main():
 	if not loadResults:
 
 		### get simulation folders
-		simFolds, nsim = utils.getSimFolds(copiesFile, simFold, rseed)
+		simFolds, nsim = utils.getSimFolds(copiesFile, simFold)
 
 		### get pickled data
 		connFile = "analysis/connectivity_vars.pkl"
 		n_scaf = readConn(connFile)
 
 		### get ideal positions
-		if calcRMSD:
-			r = utils.initPositionsCaDNAno(cadFile)[0]
-			r_ideal = r[:n_scaf]
+		if doRMSD: r_ideal = utils.initPositionsCaDNAno(cadFile)[0][:n_scaf]
 
 		### get minimum number of steps
 		nstep_allSim = np.zeros(nsim,dtype=int)
@@ -98,15 +96,10 @@ def main():
 			datFile = simFolds[i] + "analysis/trajectory_centered.dat"
 			nstep_allSim[i] = ars.getNstep(datFile, nstep_skip, coarse_time)
 		nstep_min = int(min(nstep_allSim))
-		nstep_use = nstep_min if nstep_max == 0 else min([nstep_min,nstep_max])
-
-		### get trajectory dump frequency
-		datFile = simFolds[0] + "analysis/trajectory_centered.dat"
-		dump_every = ars.getDumpEvery(datFile)*coarse_time
+		nstep_use = nstep_min if nstep_max == 0 else min([nstep_min,nstep_max+1])
 
 		### whole scaffold analysis
 		if clusterFile is None:
-			bdis = list(range(1,n_scaf+1))
 
 			### loop through simulations
 			S_allSim = np.zeros((nsim,nstep_use))
@@ -114,17 +107,17 @@ def main():
 			ACN_allSim = np.zeros(nsim)
 			for i in range(nsim):
 
-				### calculate crustallinity
+				### calculations
 				datFile = simFolds[i] + "analysis/trajectory_centered.dat"; print()
-				points, _, dbox = ars.readAtomDump(datFile, nstep_skip, coarse_time, bdis=bdis, nstep_max=nstep_use)
+				points, _, dbox, used_every = ars.readAtomDump(datFile, nstep_skip, coarse_time, bdis=-n_scaf, nstep_max=nstep_use, getUsedEvery=True)
 				S_allSim[i] = utils.calcCrystallinity(points, dbox)
-				if calcRMSD:
-					RMSD_allSim[i] = utils.calcRMSD(points, r_ideal)
-				if calcACN:
-					ACN_allSim[i] = estimateACN(points[-1])
+				if doRMSD: RMSD_allSim[i] = utils.calcRMSD(points, r_ideal)
+				if doACN: ACN_allSim[i] = calcACN(points[-1])
 
 		### clustered scaffold analysis
 		else:
+
+			### read clusters
 			bdis = ars.readCluster(clusterFile)
 			ncluster = len(bdis)
 
@@ -150,12 +143,12 @@ def main():
 	### load results
 	else:
 		resultsFile = "analysis/crystallinity_results.pkl"
-		cucumber = utils.unpickle(resultsFile, [2,2,1,0])
+		cucumber = ars.unpickle(resultsFile, [2,2,1,0])
 		[S_allSim, RMSD_allSim, ACN_allSim, dump_every] = cucumber
 
 		### trim steps
 		nstep_pkl = S_allSim.shape[1]
-		nstep_use = nstep_pkl if nstep_max == 0 else min([nstep_pkl,nstep_max])
+		nstep_use = nstep_pkl if nstep_max == 0 else min([nstep_pkl,nstep_max+1])
 		S_allSim = S_allSim[:,:nstep_use]
 		RMSD_allSim = RMSD_allSim[:,:nstep_use]
 
@@ -170,15 +163,15 @@ def main():
 
 	### report best simulations
 	if copiesFile is not None:
-		copyNames = ars.readCopies(copiesFile)[0]
+		copyNames = utils.readCopies(copiesFile)[0]
 		sorted_results = sorted(zip(S_allSim[:,-1], RMSD_allSim[:,-1], ACN_allSim, copyNames), reverse=True)
 		print("\nProduct qualities:")
 		for S_final, RMSD, ACN, copyName in sorted_results:
-			if calcRMSD and calcACN:
+			if doRMSD and doACN:
 				print(f"{copyName}: {S_final:0.4f}, {RMSD:0.4f}, {ACN:0.4f}")
-			elif calcRMSD:
+			elif doRMSD:
 				print(f"{copyName}: {S_final:0.4f}, {RMSD:0.4f}")
-			elif calcACN:
+			elif doACN:
 				print(f"{copyName}: {S_final:0.4f}, {ACN:0.4f}")
 			else:
 				print(f"{copyName}: {S_final:0.4f}")
@@ -187,14 +180,16 @@ def main():
 	if saveFig: ars.createSafeFold("analysis/figures")
 
 	### RMSD
-	if calcRMSD:
+	if doRMSD:
 		plotRMSD(RMSD_allSim, dump_every)
 		if saveFig: plt.savefig("analysis/figures/RMSD.pdf")
+		plotRMSDvS(RMSD_allSim, S_allSim)
+		if saveFig: plt.savefig("analysis/figures/RMSDvS.pdf")
 
-	### knotty
-	if calcACN:
+	### ACN
+	if doACN:
 		plotACNvS(ACN_allSim, S_allSim)
-		if saveFig: plt.savefig("analysis/figures/ACN.pdf")
+		if saveFig: plt.savefig("analysis/figures/ACNvS.pdf")
 
 	### crystallinity
 	plotCrystallinity(S_allSim, dump_every)
@@ -234,20 +229,11 @@ def plotCrystallinity(S_allSim, dump_every):
 			plt.plot(time, S_allSim[i], color=color, linewidth=2, alpha=0.6)
 			plt.plot(time[-1], S_allSim[i,-1], 'o', color=color)
 		if plotSEM: plt.fill_between(time, S_avg-S_sem, S_avg+S_sem, color='k', alpha=0.4, edgecolor='none')
-	plt.plot(time, S_avg, 'k', linewidth=4)
+	plt.plot(time, S_avg, color='k', linewidth=4)
 	plt.plot(time[-1],S_avg[-1], 'o', color='k')
 	plt.ylim(0,0.8)
 	plt.xlabel("Time [$s$]")
 	plt.ylabel("Crystallinity")
-
-
-### plot average crossing number
-def plotACNvS(ACN_allSim, S_allSim):
-	ars.magicPlot()
-	plt.figure("ACN")
-	plt.scatter(ACN_allSim,S_allSim[:,-1])
-	plt.xlabel("Average Crossing Number")
-	plt.ylabel("Final Crystallinity")
 
 
 ### plot simulation and average crystallinity
@@ -277,15 +263,34 @@ def plotRMSD(RMSD_allSim, dump_every):
 			plt.plot(time,RMSD_allSim[i], color=color, linewidth=2, alpha=0.6)
 			plt.plot(time[-1], RMSD_allSim[i,-1], 'o', color=color)
 		if plotSEM: plt.fill_between(time, RMSD_avg-RMSD_sem, RMSD_avg+RMSD_sem, color='k', alpha=0.4, edgecolor='none')
-	plt.plot(time,RMSD_avg, 'k', linewidth=4)
+	plt.plot(time,RMSD_avg, color='k', linewidth=4)
 	plt.plot(time[-1],RMSD_avg[-1], 'o', color='k')
 	plt.xlabel("Time [$s$]")
 	plt.ylabel("$RMSD$")
 
 
+### plot average crossing number against crystallinity
+def plotACNvS(ACN_allSim, S_allSim):
+	ars.magicPlot()
+	plt.figure("ACN vs S")
+	plt.scatter(S_allSim[:,-1], ACN_allSim, color='k')
+	plt.xlabel("Final Crystallinity")
+	plt.ylabel("Average Crossing Number")
+
+
+### plot RMSD against crystallinity
+def plotRMSDvS(RMSD_allSim, S_allSim):
+	ars.magicPlot()
+	plt.figure("RMSD vs S")
+	plt.scatter(S_allSim[:,-1], RMSD_allSim[:,-1], color='k')
+	plt.xlabel("Final Crystallinity")
+	plt.ylabel("RMSD")
+
+
 ################################################################################
 ### File Handlers
 
+### get connectivity variables
 def readConn(connFile):
 	ars.testFileExist(connFile, "connectivity")
 	with open(connFile, 'rb') as f:
@@ -295,7 +300,7 @@ def readConn(connFile):
 
 
 ################################################################################
-### Knotty
+### Average Crossing Number
 
 ### used to calculate ACN
 def generateRandomProjection():
@@ -340,7 +345,7 @@ def countCrossings(proj_chain):
 
 
 ### calculate average crossing number
-def estimateACN(chain, num_projections=100):
+def calcACN(chain, num_projections=100):
 	print("Estimating ACN...")
 	total_crossings = 0
 	for i in range(num_projections):

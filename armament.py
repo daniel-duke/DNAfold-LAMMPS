@@ -3,16 +3,25 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.special import gammaln
 import shutil
+import pickle
 import os
 import sys
 
 ### read lammps-style trajectory
-def readAtomDump(datFile, nstep_skip=0, coarse_time=1, bdis='all', coarse_points=1, nstep_max='all'):
-
+def readAtomDump(datFile, nstep_skip=0, coarse_time=1, bdis='all', coarse_points=1, nstep_max='all', **kwargs):
+	
+	### additional keyword args
+	ignorePBC		= False		if 'ignorePBC' not in kwargs else kwargs['ignorePBC']
+	getDbox3s		= False		if 'getDbox3s' not in kwargs else kwargs['getDbox3s']
+	getUsedEvery	= False		if 'getUsedEvery' not in kwargs else kwargs['getUsedEvery']
+	
 	### notes
 	# assumes the bdis array stores the atom indices starting from 1.
-	# assumes there are five columns (id, col2, xs, ys, zs)
-	# assumes the box diameter is uniform accross dimensions and does not change.
+	# assumes the dump frequency never changes, which it never should.
+	# assumes there are five columns (id, col2, xs, ys, zs).
+	# unless instructed otherwise, returns only first dimension of box diameter in first timestep.
+	# all three dimensions of the box are extracted each timestep and used to get the points.
+	# the returned points are centered about the origin, even if of the extracted values are not.
 
 	### load trajectory file
 	print("Loading LAMMPS-style trajectory...")
@@ -23,8 +32,7 @@ def readAtomDump(datFile, nstep_skip=0, coarse_time=1, bdis='all', coarse_points
 
 	### extract metadata
 	nbd_total = int(content[3].split()[0])
-	dbox = 2*float(content[5].split()[1])
-	dump_every = int(content[nbd_total+10].split()[0])
+	dump_every = int(content[nbd_total+10].split()[0]) - int(content[1].split()[0])
 	nstep_recorded = int(len(content)/(nbd_total+9))
 	nstep_trimmed = int((nstep_recorded-nstep_skip-1)/coarse_time)+1
 	if nstep_trimmed <= 0:
@@ -34,10 +42,10 @@ def readAtomDump(datFile, nstep_skip=0, coarse_time=1, bdis='all', coarse_points
 	### interpret input
 	if isinstance(nstep_max, str) and nstep_max == 'all':
 		nstep_used = nstep_trimmed
-	elif isinstance(nstep_max, int):
+	elif ars.isinteger(nstep_max):
 		nstep_used = min([nstep_max,nstep_trimmed])
 	else:
-		print("Error: Cannot read atom dump - max number of steps must be \"all\" or integer.\n")
+		print("Error: Cannot read atom dump - max number of steps must be 'all' or integer.\n")
 		sys.exit()
 
 	### report step counts
@@ -48,15 +56,17 @@ def readAtomDump(datFile, nstep_skip=0, coarse_time=1, bdis='all', coarse_points
 	### interpret input
 	if isinstance(bdis, str) and bdis == 'all':
 		bdis = [list(range(1,int(np.ceil(nbd_total/coarse_points))+1))]
-	elif isinstance(bdis, int):
+	elif ars.isinteger(bdis) and bdis < 0:
+		bdis = [list(range(1,int(np.ceil(-bdis/coarse_points))+1))]
+	elif ars.isinteger(bdis):
 		bdis = [[bdis]]
-	elif ars.isarray(bdis) and isinstance(bdis[0], int):
-		bdis = [bdis]
-	elif ars.isarray(bdis) and ars.isarray(bdis[0]) and isinstance(bdis[0][0], int):
+	elif ars.isarray(bdis) and ars.isinteger(bdis[0]):
+		bdis = [bdis[::coare_points]]
+	elif ars.isarray(bdis) and ars.isarray(bdis[0]) and ars.isinteger(bdis[0][0]):
 		for i in range(len(bdis)):
 			bdis[i] = bdis[i][::coarse_points]
 	else:
-		print("Error: Cannot read atom dump - bead indices must be \"all\", an int, a 1D int array, or 2D int array.\n")
+		print("Error: Cannot read atom dump - bead indices must be 'all', integer, 1D int array, or 2D int array.\n")
 		sys.exit()
 
 	### count total number of beads to use
@@ -68,29 +78,36 @@ def readAtomDump(datFile, nstep_skip=0, coarse_time=1, bdis='all', coarse_points
 	points = np.zeros((nstep_used,nbd_used,3))
 	col2s = np.zeros(nbd_used, dtype=int)
 	groups = np.zeros(nbd_used, dtype=int)
+	dbox3s = np.zeros((nstep_used,3))
 	for i in range(nstep_used):
 		point_count = 0
+		for k in range(3):
+			line = content[(nbd_total+9)*(nstep_skip+i*coarse_time)+5+k].split()
+			dbox3s[i,k] = float(line[1]) - float(line[0])
 		for g in range(len(bdis)):
 			for j in range(len(bdis[g])):
-				bdi = bdis[g][j]-1
-				if bdi >= nbd_total:
+				bdi = bdis[g][j]
+				if bdi > nbd_total:
 					print(f"Error: Cannot read atom dump - requested bead index {bdi} exceeds the number of beads in the simulation ({nbd_total}).\n")
 					sys.exit()
-				line = content[(nbd_total+9)*(nstep_skip+i*coarse_time)+9+bdi].split()
+				line = content[(nbd_total+9)*(nstep_skip+i*coarse_time)+9+bdi-1].split()
 				if i == 0:
 					col2s[point_count] = int(line[1])
 					groups[point_count] = g + 1
-				point = np.array(line[2:5],dtype=float)
-				points[i,point_count] = ars.applyPBC(point-1/2,1)*dbox
+				points[i,point_count] = (np.array(line[2:5],dtype=float)-1/2)*dbox3s[i]
 				point_count += 1
-		if i%1000 == 0 and i != 0:
-			print(f"Processed {i} steps...")
+		if not ignorePBC:
+			points[i] = ars.applyPBC(points[i], dbox3s[i])
+		if (i+1)%1000 == 0:
+			print(f"Processed {i+1} steps...")
 
 	### results
-	if len(bdis) == 1:
-		return points, col2s, dbox
-	else:
-		return points, col2s, dbox, groups
+	output = [ points, col2s ]
+	output.append(dbox3s[0,0])
+	if getDbox3s: output[-1] = dbox3s
+	if len(bdis) > 1: output.append(groups)
+	if getUsedEvery: output.append(dump_every*coarse_time)
+	return output
 
 
 ### extract number of steps from lammps-style trajectory
@@ -108,28 +125,13 @@ def getNstep(datFile, nstep_skip=0, coarse_time=1):
 	return nstep_trimmed
 
 
-### extract dump frequency from lammps-style trajectory
-def getDumpEvery(datFile):
-
-	### notes
-	# assumes the timestep of the second step is the dump frequency.
-
-	### load trajectory file
-	ars.testFileExist(datFile, "trajectory")
-	with open(datFile, 'r') as f:
-		content = f.readlines()
-
-	### extract dump frequency
-	nbd_total = int(content[3].split()[0])
-	dump_every = int(content[nbd_total+10].split()[0])
-	return dump_every
-
-
 ### read lammps-style geometry
 def readGeo(geoFile, **kwargs):
 
 	### keyword arguments
-	extraLabel = None if 'extraLabel' not in kwargs else kwargs['extraLabel']
+	extraLabel	= None	if 'extraLabel' not in kwargs else kwargs['extraLabel']
+	getDbox		= None	if 'getDbox' not in kwargs else kwargs['getDbox']
+	getDbox3	= None	if 'getDbox3' not in kwargs else kwargs['getDbox3']
 
 	### notes
 	# all indices are stored directly as they appear in the geometry file; in
@@ -162,6 +164,20 @@ def readGeo(geoFile, **kwargs):
 				nbond = 0
 			if nangle == -1:
 				nangle = 0
+
+	### get box diameter
+	if getDbox or getDbox3:
+		dbox3 = np.zeros(3)
+		for i in range(len(content)):
+			line = content[i].split()
+			if len(line) == 4 and line[2] == 'xlo':
+				dbox3[0] = float(line[1]) - float(line[0])
+			if len(line) == 4 and line[2] == 'ylo':
+				dbox3[1] = float(line[1]) - float(line[0])
+			if len(line) == 4 and line[2] == 'zlo':
+				dbox3[2] = float(line[1]) - float(line[0])
+			if all(dbox3>0):
+				break
 
 	### get atom information
 	r = np.zeros((natom,3))
@@ -252,39 +268,14 @@ def readGeo(geoFile, **kwargs):
 				extras[ai,j] = line[j+1]
 
 	### results
-	if not readCharge:
-		if extraLabel is None:
-			return r, molecules, types, bonds, angles
-		else:
-			return r, molecules, types, bonds, angles, extras
-	else:
-		if extraLabel is None:
-			return r, molecules, types, charges, bonds, angles
-		else:
-			return r, molecules, types, charges, bonds, angles, extras
-
-
-### read 3D box diameter from geometry file
-def getDbox3(geoFile):
-
-	### load geometry file
-	ars.testFileExist(geoFile, "geometry")
-	with open(geoFile, 'r') as f:
-		content = f.readlines()
-
-	### extract the info
-	dbox3 = [0]*3
-	for i in range(len(content)):
-		line = content[i].split()
-		if len(line) == 4 and line[2] == 'xlo':
-			dbox3[0] = float(line[1]) - float(line[0])
-		if len(line) == 4 and line[2] == 'ylo':
-			dbox3[1] = float(line[1]) - float(line[0])
-		if len(line) == 4 and line[2] == 'zlo':
-			dbox3[2] = float(line[1]) - float(line[0])
-		if all(x > 0 for x in dbox3):
-			break
-	return dbox3
+	output = [ r, molecules, types ]
+	if readCharge: output.append(charges)
+	output.append(bonds)
+	output.append(angles)
+	if extraLabel is not None: output.append(extras)
+	if getDbox: output.append(dbox3[0])
+	if getDbox3: output.append(dbox3)
+	return output
 
 
 ### read cluster file
@@ -302,26 +293,10 @@ def readCluster(clusterFile):
 	return clusters
 
 
-### read file containing names of simulation copies
-def readCopies(copiesFile):
-	ars.testFileExist(copiesFile, "copies")
-	with open(copiesFile, 'r') as f:
-		content = f.readlines()
-	nsim = len(content)
-	simFoldNames = [None]*nsim
-	for i in range(nsim):
-		simFoldNames[i] = content[i].split()[0]
-	return simFoldNames, nsim
-
-
 ### write lammps-style geometry
 def writeGeo(geoFile, dbox3, r, molecules='auto', types='auto', bonds=None, angles=None, **kwargs):
 
-	### notes
-	# bonds: nbond x 3 (bond type, atom 1, atom2) numpy array
-	# angles: nangle x 4 (angle type, atom 1, atom2, atom 3) numpy array
-
-	### added keyword args
+	### additional keyword args
 	natomType	= 'auto'	if 'natomType' not in kwargs else kwargs['natomType']
 	nbondType	= 'auto'	if 'nbondType' not in kwargs else kwargs['nbondType']
 	nangleType	= 'auto'	if 'nangleType' not in kwargs else kwargs['nangleType']
@@ -336,13 +311,15 @@ def writeGeo(geoFile, dbox3, r, molecules='auto', types='auto', bonds=None, angl
 	# by convention, molecule/type/bond/angle indexing starts at 1, however, there is
 	  # nothing in this function that requires this to be the case (it will print the
 	  # values it is given).
+	# bonds: nbond x 3 (bond type, atom 1, atom2) numpy array
+	# angles: nangle x 4 (angle type, atom 1, atom2, atom 3) numpy array
 
 	### count atoms
 	natom = len(r)
 
 	### interpret input
 	if ars.isnumber(dbox3):
-		dbox3 = [dbox3,dbox3,dbox3]
+		dbox3 = np.ones(3)*dbox3
 	elif not ars.isarray(dbox3) or len(dbox3) != 3:
 		print("Flag: Not writing geometry file - dbox3 must be number or 3-element array.")
 		return
@@ -366,7 +343,7 @@ def writeGeo(geoFile, dbox3, r, molecules='auto', types='auto', bonds=None, angl
 		includeCharge = True
 		len_charge = len(str(int(max(charges))))
 	else:
-		print("Flag: Not writing geometry file - charges must be \"auto\" or natom-element array.")
+		print("Flag: Not writing geometry file - charges must be 'auto' or natom-element array.")
 		return
 
 	### inerpret extras
@@ -393,31 +370,31 @@ def writeGeo(geoFile, dbox3, r, molecules='auto', types='auto', bonds=None, angl
 	### interpret input
 	if isinstance(natomType, str) and natomType == 'auto':
 		natomType = int(max(types))
-	elif not isinstance(natomType, int):
-		print("Flag: Not writing geometry file - natomType must be \"auto\" or integer.")
+	elif not ars.isinteger(natomType):
+		print("Flag: Not writing geometry file - natomType must be 'auto' or integer.")
 		return
 	if isinstance(nbondType, str) and nbondType == 'auto':
 		if nbond > 0:
 			nbondType = int(max(bonds[:,0]))
 		else:
 			nbondType = 0
-	elif not isinstance(nbondType, int):
-		print("Flag: Not writing geometry file - nbondType must be \"auto\" or integer.")
+	elif not ars.isinteger(nbondType):
+		print("Flag: Not writing geometry file - nbondType must be 'auto' or integer.")
 		return
 	if isinstance(nangleType, str) and nangleType == 'auto':
 		if nangle > 0:
 			nangleType = int(max(angles[:,0]))
 		else:
 			nangleType = 0
-	elif not isinstance(nangleType, int):
-		print("Flag: Not writing geometry file - nangleType must be \"auto\" or integer.")
+	elif not ars.isinteger(nangleType):
+		print("Flag: Not writing geometry file - nangleType must be 'auto' or integer.")
 		return
 
 	### interpret masses
 	if isinstance(masses, str) and masses == 'auto':
 		masses = np.ones(natomType, dtype=int)
 	elif not ars.isarray(masses) or len(masses) != natomType:
-		print("Flag: Not writing geometry file - masses must be \"auto\" or natomType-element array.")
+		print("Flag: Not writing geometry file - masses must be 'auto' or natomType-element array.")
 		return
 
 	### count digits
@@ -495,6 +472,33 @@ def writeGeo(geoFile, dbox3, r, molecules='auto', types='auto', bonds=None, angl
 				f.write("\n")
 
 
+### load array of variables from pickle file
+def unpickle(pklFile, dims=None):
+	ars.testFileExist(pklFile, "pickle")
+	with open(pklFile, 'rb') as f:
+		cucumber = pickle.load(f)
+	if dims is not None:
+		nvar = len(dims)
+		if len(cucumber) != nvar:
+			print("Error: length of pickle file array does not match expected number of variables.\n")
+			sys.exit()
+		for i in range(nvar):
+			if dims[i] == None:
+				continue
+			elif dims[i] == 0:
+				if not ars.isnumber(cucumber[i]):
+					print(f"Error: element {i} of the pickle array does not match the expected data type (number).\n")
+					sys.exit()
+			elif not ars.isarray(cucumber[i]):
+				print(f"Error: element {i} of the pickle array does not match the expected data type (array).\n")
+				sys.exit()
+			elif isinstance(cucumber[i], np.ndarray):
+				if len(cucumber[i].shape) != dims[i]:
+					print(f"Error: element {i} of the pickle array does not have the expected shape ({dims[i]}).\n")
+					sys.exit()
+	return cucumber
+
+
 ### set pretty matplotlib defaults
 def magicPlot(pubReady=False):
 
@@ -536,7 +540,7 @@ def magicPlot(pubReady=False):
 ### plot a nice histogram
 def plotHist(A, Alabel=None, title=None, figLabel="Hist", nbin='auto', Alim_bin='auto', Alim_plot='auto', Ylabel='auto', useDensity=False, **kwargs):
 
-	### added keyword args
+	### additional keyword args
 	weights			= None		if 'weights' not in kwargs else kwargs['weights']
 	plotAsLine		= False		if 'plotAsLine' not in kwargs else kwargs['plotAsLine']
 	plotAvgLine		= False		if 'plotAvgLine' not in kwargs else kwargs['plotAvgLine']
@@ -548,19 +552,19 @@ def plotHist(A, Alabel=None, title=None, figLabel="Hist", nbin='auto', Alim_bin=
 	### interpret input
 	if isinstance(nbin, str) and nbin == 'auto':
 		nbin = ars.optbins(A, 50)
-	elif not isinstance(nbin, int):
-		print("Flag: Skipping histogram plot - number of histogram bins must be either \"auto\" or integer.")
+	elif not ars.isinteger(nbin):
+		print("Flag: Skipping histogram plot - number of histogram bins must be either 'auto' or integer.")
 		return
 	if isinstance(Alim_bin, str) and Alim_bin == 'auto':
 		Alim_bin = [ min(A), max(A) ]
 	elif not ars.isarray(Alim_bin) or len(Alim_bin) != 2:
-		print("Flag: Skipping histogram plot - variable limits must be either \"auto\" or 2-element array.")
+		print("Flag: Skipping histogram plot - variable limits must be either 'auto' or 2-element array.")
 		return
 	if isinstance(Alim_plot, str) and Alim_plot == 'auto':
 		dAbin = (Alim_bin[1]-Alim_bin[0])/nbin
 		Alim_plot = [ Alim_bin[0]-dAbin/2, Alim_bin[1]+dAbin/2 ]
 	elif not ars.isarray(Alim_plot) or len(Alim_plot) != 2:
-		print("Flag: Skipping histogram plot - variable limits must be either \"auto\" or 2-element array.")
+		print("Flag: Skipping histogram plot - variable limits must be either 'auto' or 2-element array.")
 		return
 
 	### plot histogram
@@ -622,36 +626,40 @@ def centerPointsMolecule(points, molecules, dboxs, center=1, unwrap=True):
 
 		### calculate molecule coms
 		for j in range(nmolecule):
-			molecule_coms[j] = ars.calcCOMnoDummy(points_moleculed[j][i,:,:], dboxs[i])
+			if ars.checkAllDummy(points_moleculed[j][i]):
+				molecule_coms[j] = np.zeros(3)
+			elif ars.checkAnyDummy(points_moleculed[j][i]):
+				print("Error: Molecule contains mixed dummy and activated beads.\n")
+				sys.exit()
+			molecule_coms[j] = ars.calcCOM(points_moleculed[j][i], dboxs[i])
 
 		### set centering point
-		if center == "none":
+		if center == 'none':
 			com = np.zeros(3)
-		elif center == "com_points" or center == "com_beads" or center == "com_bases":
-			com = ars.calcCOMnoDummy(points[i,:,:], dboxs[i])
-		elif center == "com_molecules" or center == "com_clusters":
+		elif center == 'com_points' or center == 'com_beads' or center == 'com_bases':
+			com = ars.calcCOMnoDummy(points[i], dboxs[i])
+		elif center == 'com_molecules' or center == 'com_clusters':
 			com = ars.calcCOMnoDummy(molecule_coms, dboxs[i])
-		elif isinstance(center, int) and center <= nmolecule:
+		elif ars.isinteger(center) and center <= nmolecule:
 			com = molecule_coms[center-1,:]
 		else:
-			print("Error: Cannot center points - center must be either \"none\", \"com_points\", \"com_molecules\", or integer <= nmolecule.\n")
+			print("Error: Cannot center points - center must be either 'none', 'com_points', 'com_molecules', or integer <= nmolecule.\n")
 			sys.exit()
 
 		### center the points
 		for j in range(npoint):
-			if (molecule_coms[molecules[j]-1]==[0,0,0]).all():
-				points_centered[i,j,:] = points[i,j,:]
-			else:
-				points_centered[i,j,:] = ars.applyPBC(points[i,j,:]-com, dboxs[i])
+			if not all(molecule_coms[molecules[j]-1]==0):
+				points_centered[i,j] = ars.applyPBC(points[i,j]-com, dboxs[i])
 
 		### unwrap molecules at boundary
 		if unwrap:
 			molecule_coms_centered = np.zeros((nmolecule,3))
 			for j in range(nmolecule):
-				molecule_coms_centered[j,:] = ars.applyPBC(molecule_coms[j,:]-com, dboxs[i])
+				if not all(molecule_coms[j]==0):
+					molecule_coms_centered[j] = ars.applyPBC(molecule_coms[j]-com, dboxs[i])
 			for j in range(npoint):
-				ref = molecule_coms_centered[molecules[j]-1,:]
-				points_centered[i,j,:] = ref + ars.applyPBC(points_centered[i,j,:]-ref, dboxs[i])
+				ref = molecule_coms_centered[molecules[j]-1]
+				points_centered[i,j] = ref + ars.applyPBC(points_centered[i,j]-ref, dboxs[i])
 
 		### progress update
 		if i%1000 == 0 and i != 0:
@@ -661,17 +669,12 @@ def centerPointsMolecule(points, molecules, dboxs, center=1, unwrap=True):
 	return points_centered
 
 
-### calculate center of mass, excluding dummy particles (any particle exactly at origin)
+### calculate center of mass, excluding dummy particle
 def calcCOMnoDummy(r, dbox):
-	r_trim = np.zeros((0,3))
-	for i in range(len(r)):
-		if any(r[i]!=[0,0,0]):
-			r_trim = np.append(r_trim, [r[i]], axis=0)
-	if len(r_trim) == 0:
+	if ars.checkAllDummy(r):
 		return np.zeros(3)
-	else:
-		com = ars.calcCOM(r_trim, dbox)
-		return com 
+	mask_noDummy = ~np.all(r==0, axis=1)
+	return ars.calcCOM(r[mask_noDummy], dbox)
 
 
 ### calculate center of mass, using method from Bai and Breen 2008
@@ -682,6 +685,73 @@ def calcCOM(r, dbox):
 	r_ref = dbox*(theta_bar/(2*np.pi)-1/2)
 	com = r_ref + np.mean( ars.applyPBC(r-r_ref, dbox), axis=0 )
 	return com
+
+
+### place each point in the same image as its preceeding neighbor
+def unwrapChain(points, dbox):
+
+	### sub-function for single time step
+	def unwrapChainSingle(r, dbox, npoint):
+		r_unwrapped = np.zeros((npoint,3))
+		r_unwrapped[0] = r[0]
+		for j in range(1,npoint):
+			ref = r_unwrapped[j-1]
+			r_unwrapped[j] = ref + ars.applyPBC( r[j]-ref, dbox )
+		return r_unwrapped
+
+	### single step
+	if points.ndim == 2:
+		npoint = points.shape[0]
+		return unwrapChainSingle(points, dbox, npoint)
+
+	### multiple steps
+	elif points.ndim == 3:
+		nstep = points.shape[0]
+		npoint = points.shape[1]
+		points_unwrapped = np.zeros((nstep,npoint,3))
+		for i in range(nstep):
+			points_unwrapped[i] = unwrapChainSingle(points[i], dbox, npoint)
+		return points_unwrapped
+
+	### error
+	else:
+		print("Error: Chain points array has neither 2 nor 3 dimensions.")
+		sys.exit()
+
+
+### center the  given points with coordinate axes (centering in the process)
+def alignPC(r, indices='all', axis_rank=[0,1,2], getPCs=False):
+
+	### notes
+	# indices gives the points from which to center, calculate PCs, and rotate.
+	# axis rank gives the PC that each axis gets (in default, x-axis gets largest PC).
+
+	### interpret input
+	if isinstance(indices, str) and indices == 'all':
+		indices = np.arange(len(r))
+	elif ars.isinteger(indices):
+		indices = np.arange(indices)
+	elif not ars.isarray(indices) or not ars.isinteger(indices[0]):
+		print("Error: indices must be 'auto', integer, or int array.\n")
+		sys.exit()
+
+	### center about the given points
+	r -= np.mean(r[indices], axis=0)
+
+	### calculate principal components
+	cov = np.cov(r[indices], rowvar=False)
+	eigenvalues, eigenvectors = np.linalg.eigh(cov)
+	PCs_decreasing = eigenvectors[:,np.argsort(eigenvalues)[::-1]]
+	PCs_axisRanked = PCs_decreasing[:,axis_rank]
+
+	### rotate positions
+	r_rot = r @ PCs_axisRanked
+
+	### results
+	output = [ r_rot ]
+	if getPCs: output.append(PCs_axisRanked)
+	if len(output) == 1: output = output[0]
+	return output
 
 
 ### calculate optimum number of histogram bins
@@ -705,28 +775,6 @@ def calcSEM(A):
 ### check for overlap between a bead and a list of beads
 def checkOverlap(r0, r_other, sigma, dbox):
 	return np.any(np.linalg.norm(ars.applyPBC(r_other-r0, dbox),axis=1) < sigma)
-
-
-### align positions with principal components
-def alignPC(r, indices='auto'):
-
-	### interpret input
-	if isinstance(indices, str) and indices == 'auto':
-		indices = np.arange(len(r))
-	elif not ars.isarray(indices) or not isinstance(indices[0], int):
-		print("Error: indices must be \"auto\" or array of integers.\n")
-		sys.exit()
-
-	### calculate principal components
-	r -= np.mean(r[indices], axis=0)
-	cov = np.cov(r[indices], rowvar=False)
-	eigenvalues, eigenvectors = np.linalg.eigh(cov)
-	sorted_indices = np.argsort(eigenvalues)[::-1]
-	PCs = eigenvectors[:,sorted_indices]
-
-	### return rotated positions
-	r_rot = r @ PCs
-	return r_rot
 
 
 ### calculate moving average of an array
@@ -762,7 +810,7 @@ def boxMuller(rng=np.random):
 ### vector randomly placed within box
 def randPos(dbox3, rng=np.random):
 	if ars.isnumber(dbox3):
-		dbox3 = [dbox3,dbox3,dbox3]
+		dbox3 = np.ones(3)*dbox3
 	x = np.zeros(3)
 	for i in range(3):
 		x[i] = rng.uniform(-dbox3[i]/2, dbox3[i]/2)
@@ -802,6 +850,16 @@ def sortPointsByMolecule(points, molecules):
 	return points_moleculed
 
 
+### determine if position array contains any dummy beads
+def checkAnyDummy(r):
+	return np.any(np.all(r==0, axis=1))
+
+
+### determine if position array contains any dummy beads
+def checkAllDummy(r):
+	return np.all(r==0)
+
+
 ### test if files exist
 def testFileExist(file, name="the", required=True):
 	if os.path.isfile(file):
@@ -834,6 +892,16 @@ def isnumber(x):
 		value = float(x)
 		return True
 	except:
+		return False
+
+
+### test if variable is an integer (both python and numpy integers work)
+def isinteger(x):
+	if isinstance(x, int):
+		return True
+	elif isinstance(x, np.int64):
+		return True
+	else:
 		return False
 
 

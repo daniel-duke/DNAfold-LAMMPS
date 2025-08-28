@@ -33,33 +33,35 @@ def main():
 
 	### get arguments
 	parser = argparse.ArgumentParser()
-	parser.add_argument('--copiesFile',	type=str,	default=None,	help='name of copies file, which contains a list of simulation folders')	
-	parser.add_argument('--simFold',	type=str,	default=None,	help='name of simulation folder, should exist within current directory')
-	parser.add_argument('--rseed',		type=int,	default=1,		help='random seed, used to find simFold if necessary')
-	parser.add_argument('--cadFile',	type=str,	required=True,	help='name of caDNAno file, for initializimg positions')
-	parser.add_argument('--topFile',	type=str, 	default=None,	help='if using oxdna positions, name of topology file')
-	parser.add_argument('--confFile',	type=str, 	default=None,	help='if using oxdna positions, name of conformation file')
-	parser.add_argument('--writeIndiv',	type=int,	default=True,	help='whether to write individual hybridization trajectories')
-	parser.add_argument('--includeMis',	type=int,	default=False,	help='whether to count misbonds as hybridizations')
-	parser.add_argument('--avg_type',	type=str,	default="last",	help='how to get hyb times for each staple (values: direct, avg, first, last)')
+	parser.add_argument('--copiesFile',			type=str,	default=None,	help='name of copies file (first column - simulation folder names)')	
+	parser.add_argument('--simFold',			type=str,	default=None,	help='name of simulation folder, used if no copies file, defaults to current folder')
+	parser.add_argument('--cadFile',			type=str,	required=True,	help='name of caDNAno file, for initializimg positions')
+	parser.add_argument('--topFile',			type=str, 	default=None,	help='if using oxdna positions, name of topology file')
+	parser.add_argument('--confFile',			type=str, 	default=None,	help='if using oxdna positions, name of conformation file')
+	parser.add_argument('--nstep_max',			type=float,	default=0,		help='max number of extracted steps to use, excluding initial frame (0 for all)')
+	parser.add_argument('--includeMis',			type=int,	default=False,	help='whether to count misbonds as hybridizations')
+	parser.add_argument('--writeIndiv',			type=int,	default=False,	help='whether to write individual hybridization trajectories')
+	parser.add_argument('--time_avg_type',		type=str,	default='max',	help='how to merge individual bead hyb times for each staple (indiv, avg, max, min)')
+	parser.add_argument('--status_avg_type',	type=str,	default='min',	help='how to merge individual bead hyb status for each staple (indiv, avg, max, min)')
 
 	### set arguments
 	args = parser.parse_args()
-	cadFile = args.cadFile
 	copiesFile = args.copiesFile
 	simFold = args.simFold
-	rseed = args.rseed
+	cadFile = args.cadFile
 	topFile = args.topFile
 	confFile = args.confFile
-	writeIndiv = args.writeIndiv
+	nstep_max = int(args.nstep_max)
 	includeMis = args.includeMis
-	avg_type = args.avg_type
+	writeIndiv = args.writeIndiv
+	time_avg_type = args.time_avg_type
+	status_avg_type = args.status_avg_type
 
 	### check input
 	if topFile is not None and confFile is not None:
-		position_src = "oxdna"
+		position_src = 'oxdna'
 	else:
-		position_src = "cadnano"
+		position_src = 'cadnano'
 		if topFile is not None:
 			print("Flag: oxDNA topology file provided without configuration file, using caDNAno positions.")
 		if confFile is not None:
@@ -70,16 +72,16 @@ def main():
 ### Heart
 
 	### get simulation folders
-	simFolds, nsim = utils.getSimFolds(copiesFile, simFold, rseed)
+	simFolds, nsim = utils.getSimFolds(copiesFile, simFold)
 
 	### get pickled data
 	connFile = "analysis/connectivity_vars.pkl"
 	strands, bonds_backbone, complements, n_scaf, nbead = readConn(connFile)
 
 	### prepare position data
-	if position_src == "cadnano":
+	if position_src == 'cadnano':
 		r = utils.initPositionsCaDNAno(cadFile)[0]
-	if position_src == "oxdna":
+	if position_src == 'oxdna':
 		r = utils.initPositionsOxDNA(cadFile, topFile, confFile)[0]
 	dbox3 = prepGeoData(r)
 
@@ -89,45 +91,62 @@ def main():
 		datFile = simFolds[i] + "analysis/trajectory_centered.dat"
 		nstep_allSim[i] = ars.getNstep(datFile)
 	nstep_min = int(min(nstep_allSim))
-
-	### get hybridization dump frequency
-	hybFile = simFolds[0] + "analysis/hyb_status.dat"
-	dump_every = utils.getDumpEveryHyb(hybFile)
+	nstep_use = nstep_min if nstep_max == 0 else min([nstep_min,nstep_max+1])
 
 	### determine how to handle misbonds
-	mis_status = 'hyb' if if includeMis else 'none'
+	mis_status = 'hyb' if includeMis else 'none'
+
+	### determine which scaffold beads have no complements
+	is_noCompScaf = [ len(c)==0 for c in complements[:n_scaf] ]
+
+	### initialize
+	hyb_status_allSim = np.zeros((nsim,nstep_use,n_scaf))
+	first_hyb_times_scaled_allSim = np.zeros((nsim,n_scaf))
+	consistentUsedEvery = True
 
 	### loop over simulations
-	hyb_status_allSim = np.zeros((nsim,nstep_min,nbead))
-	first_hyb_times_allSim = np.zeros((nsim,n_scaf))
 	for i in range(nsim):
 
 		### analyze hybridizations
 		hybFile = simFolds[i] + "analysis/hyb_status.dat"; print()
-		hyb_status_allSim[i] = utils.readHybStatus(hybFile, nstep_max=nstep_min, mis_status=mis_status)
-		first_hyb_times_allSim[i], first_hyb_times_scaled = utils.calcFirstHybTimes(hyb_status_allSim[i], complements, n_scaf, dump_every)
+		hyb_status_allSim[i], used_every_indiv = utils.readHybStatus(hybFile, nstep_max=nstep_use, n_read=n_scaf, mis_status=mis_status, getUsedEvery=True)
+		first_hyb_times_scaled_allSim[i] = utils.calcFirstHybTimes(hyb_status_allSim[i], n_scaf)
+		
+		### adjustments for beads with no complements
+		if not includeMis:
+			hyb_status_allSim[i,:,is_noCompScaf] = -1
+			first_hyb_times_scaled_allSim[i,is_noCompScaf] = -1
 
-		### write hybridization trajectory
+		### check consistency of used step frequency
+		if i == 0: used_every = used_every_indiv
+		if used_every_indiv != used_every:
+			print("Flag: inconsistent dump frequencies between simulation copies, not analyzing averaged data.")
+			consistentUsedEvery = False
+
+		### write individual simulation files
 		if writeIndiv:
 			outGeoFile = simFolds[i] + "analysis/hyb_times_geometry.in"
 			outDatFile = simFolds[i] + "analysis/hyb_times_trajectory.dat"
 			ovitoFile = simFolds[i] + "analysis/vis_hyb_times.ovito"
-			colors = propScafToStap(first_hyb_times_scaled, complements, strands, avg_type)
+
+			colors = propScafToStap(first_hyb_times_scaled_allSim[i], complements, strands, time_avg_type)
 			ars.writeGeo(outGeoFile, dbox3, r, types=strands, charges=colors, bonds=bonds_backbone)
-			colors = propScafToStap(hyb_status_allSim[i][:,:n_scaf], complements, strands, avg_type)
-			writeAtomDump(outDatFile, dbox3, r, colors, dump_every)
+			colors = propScafToStap(hyb_status_allSim[i], complements, strands, status_avg_type)
+			writeAtomDump(outDatFile, dbox3, r, colors, used_every_indiv)
 			writeOvito(ovitoFile, outGeoFile, outDatFile)
 
-	### averaged binding times
-	if nsim > 1:
+	### averaged hybridization times
+	if nsim > 1 and consistentUsedEvery:
 		outGeoFile = "analysis/hyb_times_geometry.in"
 		outDatFile = "analysis/hyb_times_trajectory.dat"
 		ovitoFile = "analysis/vis_hyb_times.ovito"
-		hyb_status_avg, first_hyb_times_scaled_avg = averageHybData(hyb_status_allSim, first_hyb_times_allSim, dump_every)
-		colors = propScafToStap(first_hyb_times_scaled_avg, complements, strands, avg_type)
+
+		### calculate average data
+		hyb_status_avg, first_hyb_times_scaled_avg = averageHybData(hyb_status_allSim, first_hyb_times_scaled_allSim)
+		colors = propScafToStap(first_hyb_times_scaled_avg, complements, strands, time_avg_type)
 		ars.writeGeo(outGeoFile, dbox3, r, types=strands, charges=colors, bonds=bonds_backbone)
-		colors = propScafToStap(hyb_status_avg[:,:n_scaf], complements, strands, avg_type)
-		writeAtomDump(outDatFile, dbox3, r, colors, dump_every)
+		colors = propScafToStap(hyb_status_avg, complements, strands, status_avg_type)
+		writeAtomDump(outDatFile, dbox3, r, colors, used_every)
 		writeOvito(ovitoFile, outGeoFile, outDatFile)
 
 
@@ -143,7 +162,7 @@ def writeAtomDump(outDatFile, dbox3, r, colors, dump_every):
 	len_dbox3 = len(str(int(max(dbox3)/2)))
 	with open(outDatFile,'w') as f:
 		for i in range(nstep):
-			f.write(f"ITEM: TIMESTEP\n{i}\n")
+			f.write(f"ITEM: TIMESTEP\n{i*dump_every}\n")
 			f.write(f"ITEM: NUMBER OF ATOMS\n{npoint}\n")
 			f.write(f"ITEM: BOX BOUNDS pp pp pp\n")
 			f.write(f"-{dbox3[0]/2:0{len_dbox3+3}.2f} {dbox3[0]/2:0{len_dbox3+3}.2f} xlo xhi\n")
@@ -162,11 +181,11 @@ def writeAtomDump(outDatFile, dbox3, r, colors, dump_every):
 def writeOvito(ovitoFile, outGeoFile, outDatFile):
 
 	### set colors
-	scaf_default_color = ars.getColor("purple")
-	scaf_noComp_color = ars.getColor("grey")
+	scaf_default_color = ars.getColor('purple')
+	scaf_noComp_color = ars.getColor('grey')
 
 	### initialize pipeline
-	pipeline = import_file(outGeoFile, atom_style="full")
+	pipeline = import_file(outGeoFile, atom_style='full')
 	pipeline.add_to_scene()
 
 	### prepare basic DNAfold scene
@@ -178,16 +197,20 @@ def writeOvito(ovitoFile, outGeoFile, outDatFile):
 	traj_mod.source.load(outDatFile)
 	pipeline.modifiers.append(traj_mod)
 
-	### set scaffold and staple particle radii and bond widths (small scaffold)
+	### set scaffold and staple particle radii and bond widths (thin scaffold)
 	pipeline.modifiers.append(ComputePropertyModifier(output_property='Radius', expressions=['(ParticleType==1)?0.6:1']))
 	pipeline.modifiers.append(ComputePropertyModifier(operate_on='bonds', output_property='Width', expressions=['(@1.ParticleType==1)?1.2:2']))
 
-	### set color coding
+	### set color gradient based on charge
 	pipeline.modifiers.append(ColorCodingModifier(property='Charge', start_value=0, end_value=1, gradient=ColorCodingModifier.Viridis()))
+	
+	### set scaffold color to uniform default
 	pipeline.modifiers.append(ComputePropertyModifier(output_property='Color', expressions=[f'(ParticleType==1)?{scaf_default_color[0]}/255:Color.R', f'(ParticleType==1)?{scaf_default_color[1]}/255:Color.G', f'(ParticleType==1)?{scaf_default_color[2]}/255:Color.B']))
-	pipeline.modifiers.append(ComputePropertyModifier(enabled=False, output_property='Color', expressions=[f'(Charge==-1)?{scaf_noComp_color[0]}/255:Color.R', f'(Charge==-1)?{scaf_noComp_color[1]}/255:Color.G', f'(Charge==-1)?{scaf_noComp_color[2]}/255:Color.B']))
+	
+	### neutralize color of beads with no complements
+	pipeline.modifiers.append(ComputePropertyModifier(output_property='Color', expressions=[f'(Charge==-1)?{scaf_noComp_color[0]}/255:Color.R', f'(Charge==-1)?{scaf_noComp_color[1]}/255:Color.G', f'(Charge==-1)?{scaf_noComp_color[2]}/255:Color.B']))
 
-	### add option to delete staples
+	### add option to hide all staples
 	pipeline.modifiers.append(ComputePropertyModifier(enabled=False, output_property='Selection', expressions=['ParticleType!=1']))
 	pipeline.modifiers.append(DeleteSelectedModifier())
 
@@ -199,6 +222,7 @@ def writeOvito(ovitoFile, outGeoFile, outDatFile):
 ################################################################################
 ### File Handlers
 
+### get connectivity variables
 def readConn(connFile):
 	ars.testFileExist(connFile, "connectivity")
 	with open(connFile, 'rb') as f:
@@ -214,12 +238,11 @@ def readConn(connFile):
 ################################################################################
 ### Calculation Managers
 
-### average the first hyb times across several simulations
-def averageHybData(hyb_status_allSim, first_hyb_times_allSim, dump_every):
+### average the first hybridization times across several simulations
+def averageHybData(hyb_status_allSim, first_hyb_times_scaled_allSim):
 	nsim = hyb_status_allSim.shape[0]
 	nstep = hyb_status_allSim.shape[1]
-	nbead = hyb_status_allSim.shape[2]
-	n_scaf = first_hyb_times_allSim.shape[1]
+	n_scaf = first_hyb_times_scaled_allSim.shape[1]
 
 	### deal with hyb status
 	hyb_status_avg = np.mean(hyb_status_allSim, axis=0)
@@ -227,15 +250,11 @@ def averageHybData(hyb_status_allSim, first_hyb_times_allSim, dump_every):
 	### deal with first hyb times
 	first_hyb_times_scaled_avg = np.zeros(n_scaf)
 	for i in range(n_scaf):
-
-		### if no complement, keep -1
-		if first_hyb_times_allSim[0,i] == -1:
-			first_hyb_times_scaled_avg[i] = -1
-		elif all(first_hyb_times_allSim[:,i]==0):
+		is_hybSim = first_hyb_times_scaled_allSim[:,i] != 1
+		if not any(is_hybSim):
 			first_hyb_times_scaled_avg[i] = 1
 		else:
-			first_hyb_times_scaled_bead = first_hyb_times_allSim[:,i]/nstep/dump_every
-			first_hyb_times_scaled_avg[i] = np.mean(first_hyb_times_scaled_bead[first_hyb_times_scaled_bead != 0])
+			first_hyb_times_scaled_avg[i] = np.mean(first_hyb_times_scaled_allSim[is_hybSim,i])
 
 	### results
 	return hyb_status_avg, first_hyb_times_scaled_avg
@@ -265,18 +284,23 @@ def propScafToStapSingle(prop_scaf, strands, complements, avg_type):
 	n_scaf = len(prop_scaf)
 	n_ori = len(complements)
 	nstrand = max(strands)
+
+	### initialize
 	prop = np.zeros(n_ori)
 	prop[:n_scaf] = prop_scaf
 
-	### direct
-	if avg_type == "direct":
+	### keep individually separate
+	if avg_type == 'indiv':
 		prop[:n_scaf] = prop_scaf
 		for bi in range(n_scaf,n_ori):
 			if len(complements[bi]) > 0:
 				prop[bi] = prop_scaf[complements[bi][0]-1]
+			else:
+				print("Error: All staple beads must have scaffold complement if individually assigning scaffold to staple poperties.")
+				syss.exit()
 
-	### group correlation by strands, pre-correlation methods
-	elif avg_type == "avg" or avg_type == "first" or avg_type == "last":
+	### merge somehow
+	elif avg_type == 'avg' or avg_type == 'min' or avg_type == 'max':
 		prop_grouped = [ np.array([]) for si in range(nstrand) ]
 		prop_grouped[0] = np.zeros(1)
 		for bi in range(n_scaf):
@@ -285,11 +309,11 @@ def propScafToStapSingle(prop_scaf, strands, complements, avg_type):
 				prop_grouped[strand-1] = np.append(prop_grouped[strand-1],prop_scaf[bi])
 		prop_strand = np.zeros(nstrand)
 		for si in range(1,nstrand):
-			if avg_type == "avg":
+			if avg_type == 'avg':
 				prop_strand[si] = np.mean(prop_grouped[si])
-			elif avg_type == "first":
+			elif avg_type == 'min':
 				prop_strand[si] = np.min(prop_grouped[si])
-			elif avg_type == "last":
+			elif avg_type == 'max':
 				prop_strand[si] = np.max(prop_grouped[si])
 		for bi in range(n_scaf,n_ori):
 			prop[bi] = prop_strand[strands[bi]-1]

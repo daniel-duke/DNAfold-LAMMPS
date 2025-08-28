@@ -86,8 +86,6 @@ class parameters:
 	### record values
 	def record(self, paramsFile):
 		with open(paramsFile,'w') as f:
-			f.write(f"rseed             {self.rseed:0.0f}\n")
-			f.write(f"rseed_mis         {self.rseed_mis:0.0f}\n")			
 			f.write(f"nstep             {self.nstep:0.0f}\n")
 			f.write(f"nstep_relax       {self.nstep_relax:0.0f}\n")
 			f.write(f"dump_every        {self.dump_every:0.0f}\n")
@@ -98,6 +96,7 @@ class parameters:
 			f.write(f"reserveStap       {self.reserveStap}\n")
 			f.write(f"forceBind         {self.forceBind}\n")
 			f.write(f"startBound        {self.startBound}\n")
+			f.write(f"rseed_mis         {self.rseed_mis:0.0f}\n")
 			f.write(f"nmisBond          {self.nmisBond}\n")
 			f.write(f"ncompFactor       {self.ncompFactor}\n")
 			f.write(f"optCompFactors    {self.optCompFactors}\n")

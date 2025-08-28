@@ -13,24 +13,43 @@ import sys
 ### File Handlers
 
 ### get simulation folders
-def getSimFolds(copiesFile=None, simFold=None, rseed=None):
+def getSimFolds(copiesFile=None, simFold=None):
 	if copiesFile is not None:
-		copyNames, nsim = ars.readCopies(copiesFile)
+		copyNames, nsim = readCopies(copiesFile)
 		simFolds = [ copyNames[i] + "/" for i in range(nsim) ]
 		if simFold is not None:
-			print("Flag: both simFold and copieFile defined, using copiesFile only.")
+			print("Flag: Both copies file and simulation folder defined, using copies file only.")
 	else:
 		nsim = 1
 		if simFold is not None:
 			simFolds = [ simFold + "/" ]
 		else:
-			simFolds = [ f"sim{rseed:02.0f}" + "/" ]
+			simFolds = [ "./" ]
 	return simFolds, nsim
+
+
+### read file containing names of simulation copies
+def readCopies(copiesFile, getRseeds=False):
+	ars.testFileExist(copiesFile, "copies")
+	with open(copiesFile, 'r') as f:
+		content = f.readlines()
+	nsim = len(content)
+	simFoldNames = [None]*nsim
+	if getRseeds: rseeds = [None]*nsim
+	for i in range(nsim):
+		line = content[i].split()
+		simFoldNames[i] = line[0]
+		if getRseeds and len(line) > 1:
+			rseeds[i] = int(line[1])
+	if not getRseeds:
+		return simFoldNames, nsim
+	else:
+		return simFoldNames, rseeds, nsim
 
 
 ### read oxdna configuration
 def readConf(confFile, nba_total):
-	ars.testFileExist(confFile,"configuration")
+	ars.testFileExist(confFile, "configuration")
 	with open(confFile) as f:
 		content = f.readlines()
 	dbox3 = [ float(i) for i in content[1].split()[2:] ]
@@ -47,7 +66,7 @@ def readConf(confFile, nba_total):
 
 ### read oxdna topology
 def readTop(topFile):
-	ars.testFileExist(topFile,"topology")
+	ars.testFileExist(topFile, "topology")
 	with open(topFile) as f:
 		content = f.readlines()
 	nba_total = int(content[0].split()[0])
@@ -57,7 +76,7 @@ def readTop(topFile):
 
 ### read misbinding cutoffs and energies file
 def readMis(misFile):
-	ars.testFileExist(misFile,"misbinding")
+	ars.testFileExist(misFile, "misbinding")
 	with open(misFile) as f:
 		content = f.readlines()
 	nmisBond = len(content)
@@ -71,15 +90,20 @@ def readMis(misFile):
 
 
 ### read hybridization status file
-def readHybStatus(hybFile, nstep_skip=0, coarse_time=1, nstep_max='all', mis_status='none'):
+def readHybStatus(hybFile, nstep_skip=0, coarse_time=1, nstep_max='all', **kwargs):
+
+	### added keyword args
+	n_read			= 'all'		if 'n_read' not in kwargs else kwargs['n_read']
+	mis_status		= 'none'	if 'mis_status' not in kwargs else kwargs['mis_status']
+	getUsedEvery	= False		if 'getUsedEvery' not in kwargs else kwargs['getUsedEvery']
 
 	### notes
 	# misbinding status describes how to handle misbonds, specifically whether to count them as 
 	  # nothing (none, set to 0), hybridizations (hyb, set to 1), or misbonds (mis, keep at 1.XX)
-
+	
 	### load hyb status file
 	print("Loading hybridization status...")
-	ars.testFileExist(hybFile,"hybridization status")
+	ars.testFileExist(hybFile, "hybridization status")
 	with open(hybFile, 'r') as f:
 		content = f.readlines()
 	print("Parsing hybridization status...")
@@ -92,16 +116,21 @@ def readHybStatus(hybFile, nstep_skip=0, coarse_time=1, nstep_max='all', mis_sta
 	nstep_recorded = int(len(content)/(nbead+1))
 	nstep_trimmed = int((nstep_recorded-nstep_skip-1)/coarse_time)+1
 	if nstep_trimmed <= 0:
-		print("Error: Cannot read hyb status - too much initial time cut off.\n")
+		print("Error: Cannot read hybridization status - too much initial time cut off.\n")
 		sys.exit()
 
 	### interpret input
 	if isinstance(nstep_max, str) and nstep_max == 'all':
 		nstep_used = nstep_trimmed
-	elif isinstance(nstep_max, int):
+	elif ars.isinteger(nstep_max):
 		nstep_used = min([nstep_max,nstep_trimmed])
 	else:
-		print("Error: Cannot read hyb status - max number of steps must be \"all\" or integer.\n")
+		print("Error: Cannot read hybridization status - max number of steps must be 'all' or integer.\n")
+		sys.exit()
+	if isinstance(n_read, str) and n_read == 'all':
+		n_read = nbead
+	elif not ars.isinteger(n_read):
+		print("Error: Cannot read hybridization status - number of beads to read must be 'all' or integer.\n")
 		sys.exit()
 
 	### report step counts
@@ -110,10 +139,15 @@ def readHybStatus(hybFile, nstep_skip=0, coarse_time=1, nstep_max='all', mis_sta
 	print("{:1.2e} steps used".format(nstep_used))
 
 	### read data
-	hyb_status = np.zeros((nstep_used,nbead))
+	hyb_status = np.zeros((nstep_used,n_read))
 	for i in range(nstep_used):
-		for j in range(nbead):
+		for j in range(n_read):
+			if j >= nbead:
+				print(f"Error: Cannot read hybridization status - requested bead index {j} exceeds the number of beads in the simulation ({nbead}).\n")
+				sys.exit()
 			hyb_status[i,j] = content[(nbead+1)*(nstep_skip+i*coarse_time)+1+j].split()[1]
+		if i%1000 == 0 and i != 0:
+			print(f"Processed {i} steps...")
 
 	### adjust misbinding values
 	if mis_status == 'hyb':
@@ -121,16 +155,19 @@ def readHybStatus(hybFile, nstep_skip=0, coarse_time=1, nstep_max='all', mis_sta
 	elif mis_status == 'none':
 		hyb_status[hyb_status>1] = 0
 	elif mis_status != 'mis':
-		print("Error: unrecognized misbinding status.")
+		print("Error: Unrecognized misbinding status.\n")
 		sys.exit()
 
 	### result
-	return hyb_status
+	output = [ hyb_status ]
+	if getUsedEvery: output.append(dump_every*coarse_time)
+	if len(output) == 1: output = output[0]
+	return output
 
 
 ### extract dump frequency from hyb status file
 def getDumpEveryHyb(hybFile):
-	ars.testFileExist(hybFile,"hybridization status")
+	ars.testFileExist(hybFile, "hybridization status")
 	with open(hybFile, 'r') as f:
 		content = f.readlines()
 
@@ -159,67 +196,50 @@ def setOvitoBasics(pipeline):
 	bonds_vis = pipeline.source.data.particles.bonds.vis
 	bonds_vis.width = 2.4
 
-	### set active viewport to top perspective
-	viewport = scene.viewports.active_vp
+	### first viewport camera
+	viewport = scene.viewports[0]
+	viewport.type = Viewport.Type.ORTHO
+	viewport.camera_dir = (0,0,1)
+	viewport.camera_up = (0,-1,0)
+	viewport.zoom_all()
+
+	### second viewport camera
+	viewport = scene.viewports[1]
+	viewport.type = Viewport.Type.ORTHO
+	viewport.camera_dir = (-1,0,0)
+	viewport.camera_up = (0,-1,0)
+	viewport.zoom_all()
+
+	### third viewport camera
+	viewport = scene.viewports[2]
 	viewport.type = Viewport.Type.PERSPECTIVE
 	viewport.camera_dir = (-1,0,0)
-	viewport.camera_up = (0,1,0)
+	viewport.camera_up = (0,-1,0)
+	viewport.zoom_all()
+
+	### fourth viewport camera
+	viewport = scene.viewports[3]
+	viewport.type = Viewport.Type.PERSPECTIVE
+	viewport.camera_dir = (-1,1,1)
+	viewport.camera_up = (0,-1,0)
 	viewport.zoom_all()
 
 	### results
 	return pipeline
 
 
-### load array of variables from pickle file
-def unpickle(pklFile, dims=None):
-	ars.testFileExist(pklFile, "pickle")
-	with open(pklFile, 'rb') as f:
-		cucumber = pickle.load(f)
-	if dims is not None:
-		nvar = len(dims)
-		if len(cucumber) != nvar:
-			print("Error: length of pickle file array does not match expected number of variables.\n")
-			sys.exit()
-		for i in range(nvar):
-			if dims[i] == None:
-				continue
-			elif dims[i] == 0:
-				if not ars.isnumber(cucumber[i]):
-					print(f"Error: element {i} of the pickle array does not match the expected data type (number).\n")
-					sys.exit()
-			elif not ars.isarray(cucumber[i]):
-				print(f"Error: element {i} of the pickle array does not match the expected data type (array).\n")
-				sys.exit()
-			elif isinstance(cucumber[i], np.ndarray):
-				if len(cucumber[i].shape) != dims[i]:
-					print(f"Error: element {i} of the pickle array does not have the expected shape ({dims[i]}).")
-					sys.exit()
-	return cucumber
-
-
 ################################################################################
 ### Calculation Managers
 
-### calculate first bind times of complements from hybridization status
-def calcFirstHybTimes(hyb_status, complements, n_scaf, dump_every):
+### calculate first hybridization time of each scaffold bead
+def calcFirstHybTimes(hyb_status, n_scaf):
 	nstep = hyb_status.shape[0]
-	first_hyb_times = np.zeros(n_scaf)
-	for i in range(n_scaf):
-		if len(complements[i]) == 0:
-			first_hyb_times[i] = -1
+	first_hyb_times = np.ones(n_scaf)*nstep
 	for i in range(nstep):
 		for j in range(n_scaf):
-			if hyb_status[i,j] == 1 and first_hyb_times[j] == 0:
-				first_hyb_times[j] = i*dump_every
-	first_hyb_times_scaled = np.zeros(n_scaf)
-	for i in range(n_scaf):
-		if first_hyb_times[i] == -1:
-			first_hyb_times_scaled[i] = -1
-		elif first_hyb_times[i] == 0:
-			first_hyb_times_scaled[i] = 1
-		else:
-			first_hyb_times_scaled[i] = first_hyb_times[i]/nstep/dump_every
-	return first_hyb_times, first_hyb_times_scaled
+			if hyb_status[i,j] == 1 and first_hyb_times[j] == nstep:
+				first_hyb_times[j] = i
+	return first_hyb_times/nstep
 
 
 ### calcualte crystallinity of a chain
@@ -315,8 +335,8 @@ def initPositionsCaDNAno(cadFile):
 	r = np.zeros((n_ori,3))
 	for bi in range(n_ori):
 		r[bi,0] = (col_index[bi]-col_middle)*2.4
-		r[bi,1] = -(row_index[bi]-row_middle)*2.4
-		r[bi,2] = -(dep_index[bi]-dep_middle)*2.72
+		r[bi,1] = (row_index[bi]-row_middle)*2.4
+		r[bi,2] = (dep_index[bi]-dep_middle)*2.72
 
 	### results
 	return r, strands
@@ -378,7 +398,7 @@ def initPositionsOxDNA(cadFile, topFile, confFile):
 				if strand_ox_to_strand[strand_ox-1] == 1:
 					strand_ox_to_strand[strand_ox-1] = strand
 				elif strand_ox_to_strand[strand_ox-1] != strand:
-					print("Error: conflicting information relating DNAfold strands to oxDNA strands.\n")
+					print("Error: Conflicting information relating DNAfold strands to oxDNA strands.\n")
 
 	### assign staple positions
 	bi = n_scaf
@@ -388,12 +408,11 @@ def initPositionsOxDNA(cadFile, topFile, confFile):
 				r[bi] = r_ox_stap[stbi]
 				bi += 1
 
-	### align positions
-	r -= np.mean(r,axis=0)
-	r = np.flip(ars.alignPC(r,np.arange(n_scaf)),axis=1)
+	### center and align positions with principal components
+	r = ars.alignPC(r,n_scaf,[2,1,0])
 
-	### flip such that 5p scaffold end is in upper left corner
-	r = r*np.sign(r[0])*[-1,1,1]
+	### flip such that 5p scaffold end is in back (min x) upper (min y) left (min z) corner
+	r = r*np.sign(r[0])*[-1,-1,-1]
 
 	### results
 	return r, strands
@@ -658,6 +677,6 @@ def find(strand, index, list):
 			if item[2] == -1 and item[3] == -1 and item[4] == -1 and item[5] == -1:
 				return -1
 			return i
-	print("Error: index not found, try again.\n")
+	print("Error: Index not found in strand/index list.\n")
 	sys.exit()
 

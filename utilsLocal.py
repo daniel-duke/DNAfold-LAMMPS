@@ -3,15 +3,15 @@ import sys
 import os
 
 ## Description
-# this script contains functions that find DNAfold files on my local computer
+# this script contains functions that find files for Daniel on his mac.
 
 
 ################################################################################
 ### File Handlers
 
 ### return standard simulation location
-def getSimHomeFold(desID, simTag="", sim_type="experiment"):
-	return "/Users/dduke/Files/dnafold_lmp/" + sim_type + "/" + desID + simTag + "/"
+def getSimHomeFold(desID, simTag="", simType="experiment"):
+	return "/Users/dduke/Files/dnafold_lmp/" + simType + "/" + desID + simTag + "/"
 
 
 ### find the caDNAno file in my file system
@@ -34,7 +34,7 @@ def getCadFile(desID):
 			return os.path.join(root, cadFileName)
 
 	### return error
-	print("Unable to find caDNAno file, aborting.")
+	print("Error: Unable to find caDNAno file.\n")
 	sys.exit()
 
 
@@ -53,4 +53,15 @@ def getRstapFile(desID, rstapTag):
 	rstapFold = projectsFold + "dnafold_lmp/reserved_staples/"
 	rstapFile = rstapFold + "rstap_" + desID + rstapTag + ".txt"
 	return rstapFile
+
+
+### write file with a list of simulation names and random seeds
+def writeCopies(outFold, rseed, nsim):
+	copiesFile = outFold + "copies.txt"
+	outSimFolds = [None]*nsim
+	with open(copiesFile, 'w') as f:
+		for i in range(nsim):
+			f.write(f"sim{rseed+i:02.0f} {rseed+i}\n")
+			outSimFolds[i] = outFold + f"sim{rseed+i:02.0f}/"
+	return outSimFolds
 

@@ -24,6 +24,7 @@ import os
   # first strand is always the scaffold, the indexing effectively starts at 2.
 # in addition to the packages listed above, the nupack package is required if
   # including misbinding with either energy function or position optimization.
+# required arguments from input file: cadFile, nstep, dbox
 
 # Immediate To Do
 # enumerate all templates for misbinding
@@ -41,27 +42,28 @@ import os
 def main():
 
 	### where to get files
-	useMyFiles = True
+	useDanielFiles = True
 
-	### extract files from my mac
-	if useMyFiles:
+	### special code to make Daniel happy
+	if useDanielFiles:
 
 		### chose design
-		desID = "2HBx4"				# design identification
-		simTag = ""					# added to desID to get name of simulation folder
-		simType = "experiment"		# where create simulation folder
+		desID = "16HB4x1x2_btwS"				# design identification
+		simTag = ""					# appended to desID to get name of output folder
+		simType = "production/linearScafAdd"		# prepended to desID to get name of output folder within standard location
 		rstapTag = None				# tag for reserved staples file (None for not reserving staples)
 		confTag = None				# if starting bound, tag for oxDNA configuration file (None for caDNAno positions)
-		rseed = 1					# random seed for positions and LAMMPS (also used for naming simulation folder)
-		rseed_mis = 1				# random seed for misbinding
+		rseed = 1					# random seed for positions and LAMMPS, also used for naming simulation folders
+		rseed_mis = 1				# random seed for misbinding, specifically sequence generation and position initialization
+		nsim = 30					# number of simulations, starting with given random seed and incrementing by 1 for each simulation
 
 		### choose parameters
-		nstep			= 1E7		# steps		- number of simulation steps
+		nstep			= 1E8		# steps		- number of simulation steps
 		nstep_relax		= 1E5		# steps		- number of steps for relaxation
-		dump_every		= 1E4		# steps		- number of steps between positions dumps
-		dbox			= 40		# nm		- periodic boundary diameter
+		dump_every		= 1E5		# steps		- number of steps between positions dumps
+		dbox			= 60		# nm		- periodic boundary diameter
 		stap_copies		= 1 		# int		- number of copies for each staples
-		circularScaf	= True		# bool		- whether the scaffold is circular
+		circularScaf	= False		# bool		- whether the scaffold is circular
 		forceBind		= False		# bool		- whether to force hybridization
 		startBound		= False		# bool		- whether to start at caDNAno positions
 		nmisBond		= 0			# int		- number of misbinding levels (0 for no misbinding)
@@ -76,39 +78,45 @@ def main():
 		
 		### set output folder
 		outFold = utilsLocal.getSimHomeFold(desID, simTag, simType)
-
-		### copy input files to output folder
 		ars.createSafeFold(outFold)
+
+		### set simulation folders
+		outSimFolds = utilsLocal.writeCopies(outFold, p.rseed, nsim)
+
+		### copy design files to output folder
 		outCadFile = outFold + desID + ".json"
 		os.system(f"cp \"{cadFile}\" \"{outCadFile}\"")
 		if p.reserveStap:
 			outRstapFile = outFold + "rstap_" + desID + rstapTag + ".txt"
 			os.system(f"cp \"{rstapFile}\" \"{outRstapFile}\"")
 
-	### use files in current folder
-	if not useMyFiles:
+	### regular code for the general populace
+	if not useDanielFiles:
 
 		### get arguments
 		parser = argparse.ArgumentParser()
-		parser.add_argument('--inFile',		type=str,	required=True,	help='name of input file')
+		parser.add_argument('--inFile',		type=str,	required=True,	help='name of input file, which contains file names and parameters')
+		parser.add_argument('--copiesFile',	type=str,	default=None,	help='name of copies file (first column - simulation folder names; second (optional) column - random seeds)')
+		parser.add_argument('--simFold',	type=str,	default=None,	help='name of simulation folder, used if no copies file, defaults to current folder')
 		parser.add_argument('--rseed',		type=int,	default=1,		help='random seed for positions and LAMMPS (also used for naming simulation folder)')
 		parser.add_argument('--rseed_mis',	type=int,	default=1,		help='random seed for misbinding')
 		
 		### set arguments
 		args = parser.parse_args()
 		inFile = args.inFile
+		copiesFile = args.copiesFile
+		simFold = args.simFold
 		rseed = args.rseed
 		rseed_mis = args.rseed_mis
 
 		### set parameters
-		cadFile, rstapFile, topFile, confFile, p = readInput(inFile, rseed, rseed_mis)
+		cadFile, rstapFile, oxFiles, p = readInput(inFile, rseed, rseed_mis)
 
 		### set output folder
 		outFold = "./"
 
-	### record parameters
-	paramsFile = outFold + "parameters.txt"
-	p.record(paramsFile)
+		### set simulation folders
+		outSimFolds, nsim = utils.getSimFolds(copiesFile, simFold)
 
 
 ################################################################################
@@ -117,38 +125,52 @@ def main():
 	### read caDNAno file
 	strands, backbone_neighbors, complements, is_crossover, p = buildDNAfoldModel(cadFile, p)
 
-	### read and write reserved staples file
+	### read reserved staples file
 	is_reserved_strand = readRstap(rstapFile, p)
 
-	### create simulation folders
-	outSimFold = outFold + f"sim{p.rseed:02.0f}/"
-	outReactFold = outSimFold + "react/"
-	ars.createEmptyFold(outReactFold)
+	### calculate complementary factors
+	comp_factors, mis_d2_cuts = calcCompFactors(complements, p)
 
-	### write geometry files
-	r, nhyb, nangle, mis_d2_cuts = composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossover, is_reserved_strand, cadFile, oxFiles, p)
-	composeGeoVis(outSimFold, strands, backbone_neighbors, r, p)
+	### record parameters
+	paramsFile = outFold + "parameters.txt"
+	p.record(paramsFile)
 
-	### write misbinding cutoffs
+	### record misbinding cutoffs and energies
 	outMisFile = outFold + "misbinding.txt"
 	writeMisbinding(outMisFile, mis_d2_cuts, p)
+	
+	### loop over simulations
+	for i in range(nsim):
+		p.rseed = rseed + i
 
-	### write react files
-	nreact_bondHyb = writeReactHybBond(outReactFold, mis_d2_cuts, p)
-	nreact_bondMis = writeReactMisBond(outReactFold, mis_d2_cuts, p)
-	nreact_angleAct = writeReactAngleAct(outReactFold, backbone_neighbors, complements, is_crossover, p)
-	nreact_angleDeact = writeReactAngleDeact(outReactFold, backbone_neighbors, complements, is_crossover, p)
-	nreact_bridge, nreact_unbridge = writeReactBridge(outReactFold, backbone_neighbors, complements, is_crossover, p)
+		### create simulation folder
+		outSimFold = outSimFolds[i]; print()
+		ars.createSafeFold(outSimFold)
 
-	### write lammps input file
-	writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_angleAct, nreact_angleDeact, nreact_bridge, nreact_unbridge, p)
+		### write geometry files
+		r, nhyb, nangle = composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossover, is_reserved_strand, comp_factors, cadFile, oxFiles, p)
+		composeGeoVis(outSimFold, strands, backbone_neighbors, r, p)
+
+		### create reaction folder
+		outReactFold = outSimFold + "react/"
+		ars.createEmptyFold(outReactFold)
+
+		### write react files
+		nreact_bondHyb = writeReactHybBond(outReactFold, mis_d2_cuts, p)
+		nreact_bondMis = writeReactMisBond(outReactFold, mis_d2_cuts, p)
+		nreact_angleAct = writeReactAngleAct(outReactFold, backbone_neighbors, complements, is_crossover, p)
+		nreact_angleDeact = writeReactAngleDeact(outReactFold, backbone_neighbors, complements, is_crossover, p)
+		nreact_bridge, nreact_unbridge = writeReactBridge(outReactFold, backbone_neighbors, complements, is_crossover, p)
+
+		### write lammps input file
+		writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_angleAct, nreact_angleDeact, nreact_bridge, nreact_unbridge, p)
 
 
 ################################################################################
 ### File Handlers
 
 ### read input file
-def readInput(inFile=None, rseed=1, rseed_mis=1, cadFile=None, rstapFile=None, oxFiles=None, nstep=None, nstep_relax=1E5, dump_every=1E4, dbox=100, stap_copies=1, circularScaf=True, forceBind=False, startBound=False, nmisBond=0):
+def readInput(inFile=None, rseed=1, rseed_mis=1, cadFile=None, rstapFile=None, oxFiles=None, nstep=None, nstep_relax=1E5, dump_every=1E4, dbox=None, stap_copies=1, circularScaf=True, forceBind=False, startBound=False, nmisBond=0):
 
 	### set oxDNA files
 	topFile = oxFiles[0] if oxFiles is not None else None
@@ -167,7 +189,7 @@ def readInput(inFile=None, rseed=1, rseed_mis=1, cadFile=None, rstapFile=None, o
 		'nstep_relax': 		nstep_relax,	# steps			- number of steps for relaxation
 		'dump_every': 		dump_every,		# steps			- number of steps between positions dumps
 		'dt': 				0.01,			# ns			- integration time step
-		'dbox': 			dbox,			# nm			- periodic boundary diameter
+		'dbox': 			dbox,			# nm			- periodic boundary diameter (required)
 		'stap_copies': 		stap_copies,	# int			- number of copies for each staples
 		'circularScaf':		circularScaf,	# bool			- whether the scaffold is circular
 		'forceBind': 		forceBind,		# bool			- whether to force hybridization (not applied if >1 staple copies)
@@ -334,7 +356,7 @@ def readRstap(rstapFile, p):
 
 
 ### write lammps geometry file, for simulation
-def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossover, is_reserved_strand, cadFile, oxFiles, p):
+def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossover, is_reserved_strand, comp_factors, cadFile, oxFiles, p):
 	print("Writing simulation geometry file...")
 
 	### initailize positions
@@ -432,17 +454,13 @@ def composeGeo(outSimFold, strands, backbone_neighbors, complements, is_crossove
 	### count bond types
 	nbondType = 3 + p.nmisBond
 
-	### get complimentary factors
-	extras, mis_d2_cuts = calcCompFactors(complements, p)
-	extras = extras.T
-
 	### write geometry file
 	outGeoFile = outSimFold + "geometry.in"
-	ars.writeGeo(outGeoFile, p.dbox, r, molecules, types, bonds, angles, nbondType=nbondType, nangleType=2, charges=charges, extras=extras)
+	ars.writeGeo(outGeoFile, p.dbox, r, molecules, types, bonds, angles, nbondType=nbondType, nangleType=2, charges=charges, extras=comp_factors)
 
 	### return positions (without dummy atom)
 	r = r[0:p.nbead]
-	return r, nhyb, nangle, mis_d2_cuts
+	return r, nhyb, nangle
 
 
 ### write lammps geometry file, for visualization
@@ -2352,7 +2370,7 @@ def calcCompFactors(complements, p):
 			e_levels = np.linspace(efp.e_min,efp.e_cut,p.nmisBond+1)[:-1]
 			e_levels += (e_levels[1]-e_levels[0])/2
 			e_mis_avg = np.sum(e_levels*counts_opt)/p.nbead
-			print(f"\nAverage total misbinding energy per bead: {e_mis_avg:0.2f}\n")
+			print(f"\nAverage total misbinding energy per bead: {e_mis_avg:0.2f}")
 
 	### cutoff distances
 	mis_d2_cuts = np.zeros(p.nmisBond+1)
@@ -2365,14 +2383,14 @@ def calcCompFactors(complements, p):
 			mis_d2_cuts[i+1] = brentq(calcEnergyRoot, 0, efp.d_cut)**2
 
 	### set complementary factors
-	comp_factors = np.zeros((p.ncompFactor, p.nbead+1))
-	comp_factors[:,:p.n_scaf] = X
+	comp_factors = np.zeros((p.nbead+1, p.ncompFactor))
+	comp_factors[:p.n_scaf] = X.T
 	for rbi in range(p.n_scaf,p.nbead):
 		obi = rbi2obi(rbi, p)
 		if complements[obi] != -1:
-			comp_factors[:,rbi] = comp_factors[:,complements[obi]]
+			comp_factors[rbi] = comp_factors[complements[obi]]
 		else:
-			comp_factors[:,rbi] = p.rng_mis.normal(size=(p.ncompFactor))
+			comp_factors[rbi] = p.rng_mis.normal(size=p.ncompFactor)
 
 	### result
 	return comp_factors, mis_d2_cuts

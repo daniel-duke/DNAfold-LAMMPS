@@ -7,7 +7,7 @@ import os
 import sys
 
 ## Description
-# this script reads the output from a previous dnafold_lmp simulation and writes
+# this script reads the output from a previous DNAfold simulation and writes
   # the files necessary for restarting the simulation.
 # if adding staples, the restart geometry is used; otherwise, the binary restart
   # file is used.
@@ -24,10 +24,11 @@ def main():
 
 	### get arguments
 	parser = argparse.ArgumentParser()
+	parser.add_argument('--copiesFile',	type=str,	default=None,	help='name of copies file (first column - simulation folder names; second column - random seeds)')
+	parser.add_argument('--simFold',	type=str,	default=None,	help='name of simulation folder, used if no copies file, defaults to current folder')
 	parser.add_argument('--nstep',		type=float,	required=True,	help='number of simulation steps')
-	parser.add_argument('--simFold',	type=str,	default=None,	help='name of simulation folder, should exist within current directory')
-	parser.add_argument('--rseed',		type=int,	default=1,		help='random seed, used to find simFold if necessary')
 	parser.add_argument('--astapFile',	type=str,	default=None,	help='if adding staples, path to add staple file')
+	parser.add_argument('--rseed',		type=int,	default=None,	help='random seed, used for initializing positions if adding staples and random seeds not found in copies file')
 
 	### parameters
 	r12_eq = 2.72				# if adding staples, equilibrium bead separation
@@ -35,17 +36,34 @@ def main():
 
 	### set arguments
 	args = parser.parse_args()
-	nstep = int(args.nstep)
+	copiesFile = args.copiesFile
 	simFold = args.simFold
-	rseed = args.rseed
+	nstep = int(args.nstep)
 	astapFile = args.astapFile
-
-	### get simulation folders
-	simFolds, nsim = utils.getSimFolds(None, simFold, rseed)
+	rseed = args.rseed
 
 
 ################################################################################
 ### Heart
+
+	### get simulation folders
+	simFolds, nsim = utils.getSimFolds(copiesFile, simFold)
+
+	### get random seeds
+	if astapFile is not None:
+		if copiesFile is not None:
+			rseeds = utils.readCopies(copiesFile, True)[1]
+			if rseeds.count(None):
+				print("Flag: St least one random seed missing in copies file, using default random seed.")
+				if rseed is None:
+					print("Flag: Default random seed not set, using 1 for random seed.")
+					rseed = 1
+				rseeds = [rseed if x is None else x for x in rseeds]
+		else
+			if rseed is None:
+				print("Flag: Default random seed not set, using 1 for random seed.")
+				rseed = 1
+			rseeds = [rseed]
 
 	### loop over simulations
 	for i in range(nsim):
@@ -59,12 +77,11 @@ def main():
 
 			### read geometry file
 			geoFile = simFolds[i] + "restart_geometry.out"
-			r, molecules, types, charges, bonds, angles, extras = ars.readGeo(geoFile, extraLabel="CFs")
-			dbox = ars.getDbox3(geoFile)[0]
+			r, molecules, types, charges, bonds, angles, extras, dbox = ars.readGeo(geoFile, extraLabel="CFs", getDbox=True)
 			strands = molecules[:-1]
 
 			### create random number generator
-			rng = np.random.default_rng(rseed)
+			rng = np.random.default_rng(rseeds[i])
 
 			### add staples
 			nstrand = max(strands)
@@ -203,7 +220,7 @@ def addStap(r, strands, types, is_add_strand, r12_eq, sigma, dbox, rng):
 
 			### warning if trying to add active strand
 			if is_add_strand[strands[bi]-1] and is_active[bi]:
-				print("Flag: skipping the addition of an already active staple.")
+				print("Flag: Skipping the addition of an already active staple.")
 
 			### updates
 			nbead_placed += sum(strands==nstrand_locked+1)
@@ -254,7 +271,7 @@ def addStap(r, strands, types, is_add_strand, r12_eq, sigma, dbox, rng):
 
 			### give up if too many strand failures
 			if nfail_strand == max_nfail_strand:
-				print("Error: could not place beads, try again with larger box.")
+				print("Error: Could not place beads, try again with larger box.")
 				sys.exit()
 
 	### return positions
