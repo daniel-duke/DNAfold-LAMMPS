@@ -82,6 +82,10 @@ def main():
 	if not loadResults and copiesFile is None:
 		print("Error: copies file required if not loading results.")
 		sys.exit()
+	if mov_avg_stride == parser.get_default('mov_avg_stride'):
+		print("Flag: Using the default moving average stide (1), which may not be ideal.")
+
+	### check on oxDNA files
 	if topFile is not None and confFile is not None:
 		position_src = 'oxdna'
 	else:
@@ -90,8 +94,6 @@ def main():
 			print("Flag: oxDNA topology file provided without configuration file, using caDNAno positions.")
 		if confFile is not None:
 			print("Flag: oxDNA configuration file provided without topology file, using caDNAno positions.")
-	if mov_avg_stride == parser.get_default('mov_avg_stride'):
-		print("Flag: Using the default moving average stide (1), which may not be ideal.")
 
 
 ################################################################################
@@ -127,7 +129,7 @@ def main():
 			first_hyb_times_scaled_allSim[i] = utils.calcFirstHybTimes(hyb_status, n_scaf)
 			n_hyb_frac_allSim[i] = np.sum(hyb_status==1,axis=1)/n_scaf
 
-			
+
 
 			### calculate crystallinity
 			datFile = simFolds[i] + "analysis/trajectory_centered.dat"
@@ -519,11 +521,8 @@ def mlp(X, y):
 ### get geometry data ready for visualization
 def prepGeoData(r, strands, complements, hybCorr, hybCorr_strand):
 	n_ori = len(strands)
-	n_scaf = np.sum(strands==1)
-
-	### box diameter
-	dbox3 = [ max(abs(r[:,0]))+2.72, max(abs(r[:,1]))+2.4, max(abs(r[:,2]))+2.4 ]
-	dbox3 = [ 2*i for i in dbox3 ]
+	n_scaf = sum(strands==1)
+	n_padBox = 2
 
 	### assign charge
 	charges = np.zeros(n_ori)
@@ -532,7 +531,11 @@ def prepGeoData(r, strands, complements, hybCorr, hybCorr_strand):
 	for bi in range(n_scaf,n_ori):
 		charges[bi] = hybCorr_strand[strands[bi]-1]
 
-	### return results
+	### box diameter
+	dbox3 = [ max(abs(r[:,0]))+n_padBox*2.4, max(abs(r[:,1]))+n_padBox*2.4, max(abs(r[:,2]))+n_padBox*2.72 ]
+	dbox3 = [ 2*i for i in dbox3 ]
+
+	### results
 	return r, charges, dbox3
 
 

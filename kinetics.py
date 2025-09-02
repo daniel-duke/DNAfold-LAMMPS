@@ -77,7 +77,7 @@ def main():
 
 		### check consistency of used step frequency
 		if i == 0: used_every = used_every_indiv
-		if dump_every_indiv != dump_every:
+		if used_every_indiv != used_every:
 			print("Error: inconsistent dump frequencies between simulation copies.")
 			sys.exit()
 
@@ -86,11 +86,11 @@ def main():
 
 	### plot native complement kinetics
 	if doKinetics:
-		plotKinetics(hyb_status_allSim, strands, n_scaf, dump_every)
+		plotKinetics(hyb_status_allSim, strands, n_scaf, used_every)
 		if saveFig: plt.savefig("analysis/figures/kinetics_native.pdf")
 
 	### plot number of native complement scaffold hybridizations
-	plotNhyb(hyb_status_allSim, n_scaf, dump_every)
+	plotNhyb(hyb_status_allSim, n_scaf, used_every)
 	if saveFig: plt.savefig("analysis/figures/n_hyb_native.pdf")
 
 	### misbinding analysis
@@ -98,15 +98,15 @@ def main():
 
 		### plot misbond-inclusive kinetics
 		if doKinetics:
-			plotKinetics(hyb_status_allSim, strands, n_scaf, dump_every, True)
+			plotKinetics(hyb_status_allSim, strands, n_scaf, used_every, True)
 			if saveFig: plt.savefig("analysis/figures/kinetics_all.pdf")
 
 		### plot total number of scaffold hybridizations
-		plotNhyb(hyb_status_allSim, n_scaf, dump_every, True)
+		plotNhyb(hyb_status_allSim, n_scaf, used_every, True)
 		if saveFig: plt.savefig("analysis/figures/n_hyb_all.pdf")
 
 		### plot number of scaffold misbonds
-		plotNmis(hyb_status_allSim, n_scaf, dump_every, misFile)
+		plotNmis(hyb_status_allSim, n_scaf, used_every, misFile)
 		if saveFig: plt.savefig("analysis/figures/n_mis.pdf")
 
 	### display
@@ -117,7 +117,7 @@ def main():
 ### Plotters
 
 ### plot free staple kinetics
-def plotKinetics(hyb_status_allSim, strands, n_scaf, dump_every, includeMis=False):
+def plotKinetics(hyb_status_allSim, strands, n_scaf, used_every, includeMis=False):
 	nsim = hyb_status_allSim.shape[0]
 	nstep = hyb_status_allSim.shape[1]
 
@@ -128,7 +128,7 @@ def plotKinetics(hyb_status_allSim, strands, n_scaf, dump_every, includeMis=Fals
 	conc_avg, conc_sem, conc_min = calcKinetics(hyb_status_allSim, strands, n_scaf)
 	error_min = np.maximum(conc_avg - conc_sem, conc_min*np.ones(nstep))
 	error_max = conc_avg + conc_sem
-	time = utils.getTime(nstep, dump_every)
+	time = utils.getTime(nstep, used_every)
 
 	### plot
 	ars.magicPlot()
@@ -143,7 +143,7 @@ def plotKinetics(hyb_status_allSim, strands, n_scaf, dump_every, includeMis=Fals
 
 
 ### plot number of hybridizations
-def plotNhyb(hyb_status_allSim, n_scaf, dump_every, includeMis=False):
+def plotNhyb(hyb_status_allSim, n_scaf, used_every, includeMis=False):
 	nsim = hyb_status_allSim.shape[0]
 	nstep = hyb_status_allSim.shape[1]
 
@@ -154,7 +154,7 @@ def plotNhyb(hyb_status_allSim, n_scaf, dump_every, includeMis=False):
 	n_hyb_avg, n_hyb_sem = calcNhyb(hyb_status_allSim, n_scaf, includeMis)
 	error_min = n_hyb_avg - n_hyb_sem
 	error_max = n_hyb_avg + n_hyb_sem
-	time = utils.getTime(nstep, dump_every)
+	time = utils.getTime(nstep, used_every)
 
 	### plot
 	ars.magicPlot()
@@ -170,7 +170,7 @@ def plotNhyb(hyb_status_allSim, n_scaf, dump_every, includeMis=False):
 
 
 ### plot number of hybridizations
-def plotNmis(hyb_status_allSim, n_scaf, dump_every, misFile):
+def plotNmis(hyb_status_allSim, n_scaf, used_every, misFile):
 	nsim = hyb_status_allSim.shape[0]
 	nstep = hyb_status_allSim.shape[1]
 
@@ -182,7 +182,7 @@ def plotNmis(hyb_status_allSim, n_scaf, dump_every, misFile):
 	n_mis_avg, n_mis_sem = calcNmis(hyb_status_allSim, n_scaf, nmisBond)
 	error_min = n_mis_avg - n_mis_sem
 	error_max = n_mis_avg + n_mis_sem
-	time = utils.getTime(nstep, dump_every)
+	time = utils.getTime(nstep, used_every)
 
 	### plot
 	ars.magicPlot()

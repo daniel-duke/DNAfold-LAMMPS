@@ -266,32 +266,43 @@ def calcCrystallinity(points, dbox):
 
 
 ### aligning structures for RMSD
-def kabschAlgorithm(r_real, r_ideal):
+def kabschAlgorithm(r_real, r_ideal, indices='all', getR=False):
 
-	# Center both point sets at the origin
-	r_ideal_centered = r_ideal - r_ideal.mean(axis=0)
-	r_real_centered = r_real - r_real.mean(axis=0)
+	### interpret input
+	if isinstance(indices, str) and indices == 'all':
+		indices = np.arange(len(r_real))
+	elif ars.isinteger(indices):
+		indices = np.arange(indices)
+	elif not ars.isarray(indices) or not ars.isinteger(indices[0]):
+		print("Error: indices must be 'auto', integer, or int array.\n")
+		sys.exit()
 
-	# Compute covariance matrix
+	### enter both sets of points
+	com_real = np.mean(r_real[indices], axis=0)
+	r_real_centered = r_real - com_real
+	com_ideal = np.mean(r_ideal[indices], axis=0)
+	r_ideal_centered = r_ideal - com_ideal
+
+	### covariance and SVD
 	H = r_real_centered.T @ r_ideal_centered
-
-	# Singular Value Decomposition
 	U, S, Vt = np.linalg.svd(H)
 
-	# Compute rotation matrix
-	R = Vt.T @ U.T
+	### enforce right-handedness
+	if np.linalg.det(U@Vt) < 0:
+		U[:,-1] *= -1
 
-	# Ensure right-handed coordinate system (det(R)=1)
-	if np.linalg.det(R) < 0:
-		Vt[-1, :] *= -1
-		R = Vt.T @ U.T
+	### calculate rotation
+	R = U @ Vt
 
-	# Rotate real points
-	r_real_rotated = r_real_centered @ R
+	### rotate positions, add ideal center
+	r_real_rot = r_real_centered @ R
+	r_real_aligned = r_real_rot + com_ideal
 
-	# Translate real rotated point to the same mean as ideal points
-	r_real_aligned = r_real_rotated + r_ideal.mean(axis=0)
-	return r_real_aligned
+	### results
+	output = [ r_real_aligned ]
+	if getR: output.append(R)
+	if len(output) == 1: output = output[0]
+	return output
 
 
 ### calculate mean structure of trajectory
@@ -323,7 +334,7 @@ def initPositionsCaDNAno(cadFile):
 	### parse caDNAno file
 	strands, _, row_index, col_index, dep_index = buildDNAfoldModel(cadFile)
 	strands = np.array(strands)+1
-	n_ori = len(row_index)
+	n_ori = len(strands)
 
 	### set positions
 	row_index = [i - min(row_index) for i in row_index]
@@ -338,6 +349,10 @@ def initPositionsCaDNAno(cadFile):
 		r[bi,1] = (row_index[bi]-row_middle)*2.4
 		r[bi,2] = (dep_index[bi]-dep_middle)*2.72
 
+	### center about scaffold
+	n_scaf = sum(strands==1)
+	r -= np.mean(r[:n_scaf], axis=0)
+
 	### results
 	return r, strands
 
@@ -351,7 +366,7 @@ def initPositionsOxDNA(cadFile, topFile, confFile):
 	strands, complements = buildDNAfoldModel(cadFile)[:2]
 	strands = np.array(strands)+1
 	complements = np.array(complements)+1
-	n_scaf = np.sum(strands==1)
+	n_scaf = sum(strands==1)
 	n_ori = len(strands)
 
 	### analyze topology
@@ -408,11 +423,14 @@ def initPositionsOxDNA(cadFile, topFile, confFile):
 				r[bi] = r_ox_stap[stbi]
 				bi += 1
 
-	### center and align positions with principal components
-	r = ars.alignPC(r,n_scaf,[2,1,0])
+	### center about scaffold
+	r -= np.mean(r[:n_scaf], axis=0)
+
+	### align with principal components of scaffold
+	r = ars.alignPCs(r, n_scaf, [2,1,0])
 
 	### flip such that 5p scaffold end is in back (min x) upper (min y) left (min z) corner
-	r = r*np.sign(r[0])*[-1,-1,-1]
+	r *= np.sign(r[0])*[-1,-1,-1]
 
 	### results
 	return r, strands

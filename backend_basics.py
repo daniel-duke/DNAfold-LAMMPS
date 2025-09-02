@@ -79,7 +79,7 @@ def main():
 	### assemble data params
 	params = []
 	for i in range(nsim):
-		params.append((simFolds[i], datFileName, misFile, strands, bonds_backbone, complements, compFactors, nstep_skip, nstep_max, coarse_time, center, unwrap, bicolor, r12_cut_hyb))
+		params.append((simFolds[i], datFileName, misFile, strands, bonds_backbone, complements, compFactors, n_scaf, nstep_skip, nstep_max, coarse_time, center, unwrap, bicolor, r12_cut_hyb))
 
 	### run in parallel if multiple simulations
 	if nsim == 1:
@@ -91,7 +91,7 @@ def main():
 
 
 ### body of main function
-def submain(simFold, datFileName, misFile, strands, bonds_backbone, complements, compFactors, nstep_skip, nstep_max, coarse_time, center, unwrap, bicolor, r12_cut_hyb):
+def submain(simFold, datFileName, misFile, strands, bonds_backbone, complements, compFactors, n_scaf, nstep_skip, nstep_max, coarse_time, center, unwrap, bicolor, r12_cut_hyb):
 
 	### output files
 	outFold = simFold + "analysis/"
@@ -101,9 +101,6 @@ def submain(simFold, datFileName, misFile, strands, bonds_backbone, complements,
 
 	### create analysis folder
 	ars.createSafeFold(outFold)
-
-	### figure out number of scaffold beads
-	n_scaf = sum(strands==1)
 
 	### read trajectory
 	datFile = simFold + datFileName

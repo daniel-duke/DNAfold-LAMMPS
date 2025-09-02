@@ -120,42 +120,7 @@ def main():
 	plot(chords)
 
 
-################################################################################
-### Plotter
 
-def plotChords(strands, complements):
-    nbead = len(strands)
-
-    # Find scaffold beads
-    scaffold_indices = np.where(strands==1)[0]
-    n_scaf = len(scaffold_indices)
-
-    # Positions of scaffold around circle
-    theta = np.linspace(0, 2*np.pi, n_scaf, endpoint=False)
-    x = np.cos(theta)
-    y = np.sin(theta)
-
-    # Prepare plot
-    ars.magicPlot()
-    fig, ax = plt.subplots(figsize=(8,8))
-    ax.set_aspect("equal")
-    ax.axis("off")
-
-    # Draw scaffold beads
-    ax.scatter(x, y, c="black", s=20, zorder=3)
-
-    # Draw backbone connections (staples only)
-    for i in range(nbead - 1):
-        if strands[i] == strands[i+1] and strands[i] != 1:
-            scaf1 = complements[i]
-            scaf2 = complements[i+1]
-
-            if scaf1 in scaffold_indices and scaf2 in scaffold_indices:
-                ax.plot([x[scaffold_indices == scaf1][0],
-                         x[scaffold_indices == scaf2][0]],
-                        [y[scaffold_indices == scaf1][0],
-                         y[scaffold_indices == scaf2][0]],
-                        color="grey", alpha=0.6, linewidth=1.0)
 
 
 ################################################################################
@@ -229,8 +194,8 @@ def readRstap(rstapFile):
 ### get geometry data ready for visualization
 def prepGeoData(r, strands, reserved_strands, circularScaf):
 	n_ori = len(strands)
-	n_scaf = np.sum(strands==1)
-	n_padCell = 2
+	n_scaf = sum(strands==1)
+	n_padBox = 2
 
 	### types
 	types = np.ones(n_ori)
@@ -244,14 +209,14 @@ def prepGeoData(r, strands, reserved_strands, circularScaf):
 	bonds = np.zeros((0,3),dtype=int)
 	for bi in range(n_ori-1):
 		if strands[bi] == strands[bi+1]:
-			bonds = np.append(bonds,[[strands[bi],bi+1,bi+2]],axis=0)
+			bonds = np.append(bonds, [[strands[bi],bi+1,bi+2]], axis=0)
 
 	### add scaffold ends bond
 	if circularScaf:
 		bonds = np.append(bonds, [[1,1,n_scaf]], axis=0)
 
 	### box diameter
-	dbox3 = [ max(abs(r[:,0]))+n_padCell*2.72, max(abs(r[:,1]))+n_padCell*2.4, max(abs(r[:,2]))+n_padCell*2.4 ]
+	dbox3 = [ max(abs(r[:,0]))+n_padBox*2.4, max(abs(r[:,1]))+n_padBox*2.4, max(abs(r[:,2]))+n_padBox*2.72 ]
 	dbox3 = [ 2*i for i in dbox3 ]
 
 	### return results

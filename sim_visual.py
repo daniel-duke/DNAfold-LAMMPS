@@ -31,7 +31,11 @@ def main():
 	parser.add_argument('--simFold',		type=str,	default=None,	help='name of simulation folder, used if no copies file, defaults to current folder')
 	parser.add_argument('--doUnification',	type=int,	default=False,	help='whether to unwrap the scaffold and place hybridized staples ')
 	parser.add_argument('--doAlignment',	type=int,	default=False,	help='whether to align the principal axes of the scaffold with the simulation box when sufficiently folded')
+	parser.add_argument('--align_type',		type=str,	default='rmsd',	help='if aligning, what method to use (rmsd, pcs)')
 	parser.add_argument('--align_cut',		type=float,	default=0.8,	help='if aligning, fraction of native scaffold hybridizations required to deem the scaffold "sufficiently folded"')
+	parser.add_argument('--cadFile',		type=str,	default=None,	help='if aligning by RMSD, name of caDNAno file, for initializing positions')
+	parser.add_argument('--topFile',		type=str, 	default=None,	help='if aligning by RMSD and using oxdna positions, name of topology file')
+	parser.add_argument('--confFile',		type=str, 	default=None,	help='if aligning by RMSD and using oxdna positions, name of conformation file')
 	parser.add_argument('--hideStap',		type=int,	default=False,	help='whether to hide all staples from view, only showing scaffold')
 	parser.add_argument('--win_render',		type=str,	default='none',	help='what window to render (none, front, side_ortho, side_perspec, corner)')
 	parser.add_argument('--frame_rate',		type=float,	default=10,		help='if rendering, frame rate of movie (frames per second)')
@@ -53,7 +57,11 @@ def main():
 	simFold = args.simFold
 	doUnification = args.doUnification
 	doAlignment = args.doAlignment
+	align_type = args.align_type
 	align_cut = args.align_cut
+	cadFile = args.cadFile
+	topFile = args.topFile
+	confFile = args.confFile
 	hideStap = args.hideStap
 	win_render = args.win_render
 	frame_rate = args.frame_rate
@@ -67,6 +75,20 @@ def main():
 		print("Error: Choose either unification (with no alignment) or aligment (which includes unification).\n")
 		sys.exit()
 
+	### check for files required for RMSD alignment
+	if doAlignment and align_type == 'rmsd':
+		if cadFile is None:
+			print("Error: caDNAno file required for RMSD alignment.\n")
+			sys.exit()
+		if topFile is not None and confFile is not None:
+			position_src = 'oxdna'
+		else:
+			position_src = 'cadnano'
+			if topFile is not None:
+				print("Flag: oxDNA topology file provided without configuration file, using caDNAno positions.")
+			if confFile is not None:
+				print("Flag: oxDNA configuration file provided without topology file, using caDNAno positions.")
+	
 
 ################################################################################
 ### Heart
@@ -77,6 +99,14 @@ def main():
 	### get pickled data
 	connFile = "analysis/connectivity_vars.pkl"
 	strands, complements, n_scaf = readConn(connFile)
+
+	### get ideal positions
+	r_ideal = None
+	if doAlignment and align_type == 'rmsd':
+		if position_src == 'cadnano':
+			r_ideal = utils.initPositionsCaDNAno(cadFile)[0]
+		if position_src == 'oxdna':
+			r_ideal = utils.initPositionsOxDNA(cadFile, topFile, confFile)[0]
 
 	### initialize pipeline
 	geoFile = simFolds[0] + "analysis/geometry_vis.in"
@@ -126,7 +156,7 @@ def main():
 			points, _, dbox, used_every = ars.readAtomDump(datFile, ignorePBC=True, getUsedEvery=True)
 
 			### calculations
-			points_aligned = alignTrajectory(points, hyb_status, dbox, strands, complements, n_scaf, align_cut, r12_cut_hyb)
+			points_aligned = alignTrajectory(points, hyb_status, dbox, strands, complements, n_scaf, align_type, align_cut, r12_cut_hyb, r_ideal)
 
 			### write data
 			outDatFile = simFolds[nsim-i-1] + "analysis/trajectory_aligned.dat";
@@ -274,10 +304,10 @@ def unifyTrajectory(points, dbox, strands, complements, n_scaf, r12_cut_hyb):
 	### loop over steps
 	for i in range(nstep):
 
-		### unwrap scaffold, keeping adjacent beads together
+		### unwrap scaffold, keeping the chain unbroken
 		r_scaf_unwrapped = ars.unwrapChain(points[i,:n_scaf], dbox)
 
-		### center around unified scaffold
+		### center around unwrapped scaffold
 		com_scaf = np.mean(r_scaf_unwrapped, axis=0)
 		points_unified[i,:n_scaf] = r_scaf_unwrapped - com_scaf
 
@@ -293,23 +323,23 @@ def unifyTrajectory(points, dbox, strands, complements, n_scaf, r12_cut_hyb):
 					if all(refs_centered[strands[j]-1]==0):
 						refs_centered[strands[j]-1] = ref
 
-		### loop over staple strands, setting reference to staple com if not set by scaffold complement
+		### loop over staple strands, setting reference to staple com if not set to scaffold complement
 		for j in range(1,nstrand):
 			if all(refs_centered[j]==0):
-				r_stap_centered = points[i,strands-1==j] - com_scaf
-				refs_centered[j] = ars.calcCOM(r_stap_centered, dbox)
+				r_stap_com = ars.calcCOM(points[i,strands-1==j], dbox)
+				refs_centered[j] = ars.applyPBC(r_stap_com-com_scaf, dbox)
 
 		### unwrap the staple beads about their reference
 		for j in range(n_scaf,nbead):
 			ref = refs_centered[strands[j]-1]
-			points_unified[i,j] = ref + ars.applyPBC( points[i,j]-com_scaf-ref, dbox )
+			points_unified[i,j] = ref + ars.applyPBC( points[i,j] - com_scaf - ref, dbox )
 
 	### result
 	return points_unified
 
 
 ### rotate trajectory to align principal components of scaffold with simulation box, then unify
-def alignTrajectory(points, hyb_status, dbox, strands, complements, n_scaf, align_cut, r12_cut_hyb):
+def alignTrajectory(points, hyb_status, dbox, strands, complements, n_scaf, align_type, align_cut, r12_cut_hyb, r_ideal=None):
 	print("Aligning trajectory...")
 
 	### get dimensions
@@ -321,20 +351,21 @@ def alignTrajectory(points, hyb_status, dbox, strands, complements, n_scaf, alig
 
 	### initialization
 	points_aligned = np.zeros((nstep,nbead,3))
-	axes_prev = None
-	axes_last = None
+	R_prev = None
+	R_curr = None
 	fixed = False
 
 	### align trajectory, working backwards
 	for i in range(nstep):
 		step = nstep-i-1
+		R_prev = R_curr
 
-		### align to scaffold
+		### check whether axes have been fixed
 		if fixed == False:
 
-			### if insufficient hybridizations, stop aligning by scaffold
+			### if insufficient hybridizations, freeze axes
 			if sum(hyb_status[step,:n_scaf])/n_scaf < align_cut:
-
+ 
 				### check if this is the last step
 				if i == 0:
 					print("Flag: Scaffold not sufficiently folded for alignment.")
@@ -345,26 +376,42 @@ def alignTrajectory(points, hyb_status, dbox, strands, complements, n_scaf, alig
 				print(f"Alignment axes fixed at step {step+1}")
 				fixed = True
 
-			### calculations
+			### otherwise, get axes
 			else:
-				axes_prev = axes_last
-				points_aligned[step], axes_last = ars.alignPC(points[step], int(n_scaf*2/3), [2,1,0], getPCs=True)
-				if axes_prev is not None:
-					for i in range(3):
-						if np.dot(axes_prev[i],axes_last[i]) < 1:
-							axes_last[i] *= -1
 
+				### aligning by principal components
+				if align_type == 'pcs':
+					R_curr = ars.alignPCs(points[step], n_scaf, [2,1,0], getPCs=True)[1]
 
-		### align to fixed reference
-		if fixed == True:
-			points[step] -= np.mean(points[step,n_scaf], axis=0)
-			points_aligned[step] = points[step] @ axes_last
+					### match directions with previous axes
+					if R_prev is not None:
+						dots = np.sum(R_prev * R_curr, axis=0)
+						R_curr[:,dots<0] *= -1
+
+				### aligning by RMSD
+				elif align_type == 'rmsd':
+
+					### check for ideal positions
+					if r_ideal is None:
+						print("Error: ideal positions necessary for aligning by RMSD.\n")
+						sys.exit()
+
+					### do the hard work
+					R_curr = utils.kabschAlgorithm(points[step], r_ideal, n_scaf, getR=True)[1]
+
+				### error
+				else: 
+					print("Error: Unrecognized alignment type.\n")
+					sys.exit()
+
+		### perform alignment
+		points_aligned[step] = points[step] @ R_curr
 
 	### place hybridized staples on scaffold
 	points_unified = unifyTrajectory(points_aligned, dbox, strands, complements, n_scaf, r12_cut_hyb)
 
 	### result
-	return points_aligned
+	return points_unified
 
 
 ### run the script

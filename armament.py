@@ -594,7 +594,7 @@ def plotHist(A, Alabel=None, title=None, figLabel="Hist", nbin='auto', Alim_bin=
 
 
 ### shift trajectory, placing the given point at the center, optionally unwrapping molecules at boundary
-def centerPointsMolecule(points, molecules, dboxs, center=1, unwrap=True):
+def centerPointsMolecule(points, molecules, dbox3s, center=1, unwrap=True):
 
 	### notes
 	# as the notation suggests, the indices contained in molecules must start at 1.
@@ -607,10 +607,12 @@ def centerPointsMolecule(points, molecules, dboxs, center=1, unwrap=True):
 	nmolecule = int(max(molecules))
 
 	### interpret input
-	if ars.isnumber(dboxs):
-		dboxs = nstep*[dboxs]
-	elif not ars.isarray(dboxs) or len(dboxs) != nstep:
-		print("Error: Cannot center points - dboxs must be number or nstep-element array.\n")
+	if ars.isnumber(dbox3s):
+		dbox3s = np.ones(nstep)*dbox3s
+	if ars.isarray(dbox3s) and ars.isnumber(dbox3s[0]) and len(dbox3s) == 3:
+		dbox3s = np.ones((nstep,3))*dbox3s
+	elif not ars.isarray(dbox3s) or len(dbox3s) != nstep or not (ars.isnumber(dbox3s[0]) or (ars.isarray(dbox3s[0]) and len(dbox3s[0]) != 3)):
+		print("Error: Cannot center points - dbox3s must be number, nstep-element array, or nstep x 3 array.\n")
 		sys.exit()
 
 	### sort points by molecule
@@ -631,15 +633,15 @@ def centerPointsMolecule(points, molecules, dboxs, center=1, unwrap=True):
 			elif ars.checkAnyDummy(points_moleculed[j][i]):
 				print("Error: Molecule contains mixed dummy and activated beads.\n")
 				sys.exit()
-			molecule_coms[j] = ars.calcCOM(points_moleculed[j][i], dboxs[i])
+			molecule_coms[j] = ars.calcCOM(points_moleculed[j][i], dbox3s[i])
 
 		### set centering point
 		if center == 'none':
 			com = np.zeros(3)
 		elif center == 'com_points' or center == 'com_beads' or center == 'com_bases':
-			com = ars.calcCOMnoDummy(points[i], dboxs[i])
+			com = ars.calcCOMnoDummy(points[i], dbox3s[i])
 		elif center == 'com_molecules' or center == 'com_clusters':
-			com = ars.calcCOMnoDummy(molecule_coms, dboxs[i])
+			com = ars.calcCOMnoDummy(molecule_coms, dbox3s[i])
 		elif ars.isinteger(center) and center <= nmolecule:
 			com = molecule_coms[center-1,:]
 		else:
@@ -649,17 +651,17 @@ def centerPointsMolecule(points, molecules, dboxs, center=1, unwrap=True):
 		### center the points
 		for j in range(npoint):
 			if not all(molecule_coms[molecules[j]-1]==0):
-				points_centered[i,j] = ars.applyPBC(points[i,j]-com, dboxs[i])
+				points_centered[i,j] = ars.applyPBC(points[i,j]-com, dbox3s[i])
 
 		### unwrap molecules at boundary
 		if unwrap:
 			molecule_coms_centered = np.zeros((nmolecule,3))
 			for j in range(nmolecule):
 				if not all(molecule_coms[j]==0):
-					molecule_coms_centered[j] = ars.applyPBC(molecule_coms[j]-com, dboxs[i])
+					molecule_coms_centered[j] = ars.applyPBC(molecule_coms[j]-com, dbox3s[i])
 			for j in range(npoint):
 				ref = molecule_coms_centered[molecules[j]-1]
-				points_centered[i,j] = ref + ars.applyPBC(points_centered[i,j]-ref, dboxs[i])
+				points_centered[i,j] = ref + ars.applyPBC(points_centered[i,j]-ref, dbox3s[i])
 
 		### progress update
 		if i%1000 == 0 and i != 0:
@@ -670,61 +672,43 @@ def centerPointsMolecule(points, molecules, dboxs, center=1, unwrap=True):
 
 
 ### calculate center of mass, excluding dummy particle
-def calcCOMnoDummy(r, dbox):
+def calcCOMnoDummy(r, dbox3):
 	if ars.checkAllDummy(r):
 		return np.zeros(3)
 	mask_noDummy = ~np.all(r==0, axis=1)
-	return ars.calcCOM(r[mask_noDummy], dbox)
+	return ars.calcCOM(r[mask_noDummy], dbox3)
 
 
 ### calculate center of mass, using method from Bai and Breen 2008
-def calcCOM(r, dbox):
-	xi_bar = np.mean( np.cos(2*np.pi*(r/dbox+1/2)), axis=0 )
-	zeta_bar = np.mean( np.sin(2*np.pi*(r/dbox+1/2)), axis=0 )
+def calcCOM(r, dbox3):
+	xi_bar = np.mean( np.cos(2*np.pi*(r/dbox3+1/2)), axis=0 )
+	zeta_bar = np.mean( np.sin(2*np.pi*(r/dbox3+1/2)), axis=0 )
 	theta_bar = np.arctan2(-zeta_bar, -xi_bar) + np.pi
-	r_ref = dbox*(theta_bar/(2*np.pi)-1/2)
-	com = r_ref + np.mean( ars.applyPBC(r-r_ref, dbox), axis=0 )
+	r_ref = dbox3*(theta_bar/(2*np.pi)-1/2)
+	com = r_ref + np.mean( ars.applyPBC(r-r_ref, dbox3), axis=0 )
 	return com
 
 
 ### place each point in the same image as its preceeding neighbor
-def unwrapChain(points, dbox):
-
-	### sub-function for single time step
-	def unwrapChainSingle(r, dbox, npoint):
-		r_unwrapped = np.zeros((npoint,3))
-		r_unwrapped[0] = r[0]
-		for j in range(1,npoint):
-			ref = r_unwrapped[j-1]
-			r_unwrapped[j] = ref + ars.applyPBC( r[j]-ref, dbox )
-		return r_unwrapped
-
-	### single step
-	if points.ndim == 2:
-		npoint = points.shape[0]
-		return unwrapChainSingle(points, dbox, npoint)
-
-	### multiple steps
-	elif points.ndim == 3:
-		nstep = points.shape[0]
-		npoint = points.shape[1]
-		points_unwrapped = np.zeros((nstep,npoint,3))
-		for i in range(nstep):
-			points_unwrapped[i] = unwrapChainSingle(points[i], dbox, npoint)
-		return points_unwrapped
-
-	### error
-	else:
-		print("Error: Chain points array has neither 2 nor 3 dimensions.")
-		sys.exit()
+def unwrapChain(r, dbox3):
+	npoint = r.shape[0]
+	r_unwrapped = np.zeros((npoint,3))
+	r_unwrapped[0] = r[0]
+	for j in range(1,npoint):
+		ref = r_unwrapped[j-1]
+		r_unwrapped[j] = ref + ars.applyPBC( r[j]-ref, dbox3 )
+	return r_unwrapped
 
 
-### center the  given points with coordinate axes (centering in the process)
-def alignPC(r, indices='all', axis_rank=[0,1,2], getPCs=False):
+### align the principal components of the given points with coordinate axes
+def alignPCs(r, indices='all', axis_rank=[0,1,2], getPCs=False):
 
 	### notes
 	# indices gives the points from which to center, calculate PCs, and rotate.
 	# axis rank gives the PC that each axis gets (in default, x-axis gets largest PC).
+	# as is standard, the positions array contains points in the first dimension and
+	  # coordinates in the second; in covariance terminology, this translates to 
+	  # observations in rows and variables in columns.
 
 	### interpret input
 	if isinstance(indices, str) and indices == 'all':
@@ -736,19 +720,25 @@ def alignPC(r, indices='all', axis_rank=[0,1,2], getPCs=False):
 		sys.exit()
 
 	### center about the given points
-	r -= np.mean(r[indices], axis=0)
+	com = np.mean(r[indices], axis=0)
+	r_centered = r - com
 
-	### calculate principal components
-	cov = np.cov(r[indices], rowvar=False)
+	### get principal components
+	cov = np.cov(r_centered[indices], rowvar=False)				
 	eigenvalues, eigenvectors = np.linalg.eigh(cov)
 	PCs_decreasing = eigenvectors[:,np.argsort(eigenvalues)[::-1]]
 	PCs_axisRanked = PCs_decreasing[:,axis_rank]
 
-	### rotate positions
-	r_rot = r @ PCs_axisRanked
+	### enforce right-handedness
+	if np.linalg.det(PCs_axisRanked) < 0:
+		PCs_axisRanked[:, -1] *= -1
+
+	### rotate positions, add back center
+	r_rot = r_centered @ PCs_axisRanked
+	r_aligned = r_rot + com
 
 	### results
-	output = [ r_rot ]
+	output = [ r_aligned ]
 	if getPCs: output.append(PCs_axisRanked)
 	if len(output) == 1: output = output[0]
 	return output
@@ -773,8 +763,8 @@ def calcSEM(A):
 
 
 ### check for overlap between a bead and a list of beads
-def checkOverlap(r0, r_other, sigma, dbox):
-	return np.any(np.linalg.norm(ars.applyPBC(r_other-r0, dbox),axis=1) < sigma)
+def checkOverlap(r0, r_other, sigma, dbox3):
+	return np.any(np.linalg.norm(ars.applyPBC(r_other-r0, dbox3),axis=1) < sigma)
 
 
 ### calculate moving average of an array
@@ -797,7 +787,8 @@ def applyPBC(r, dbox):
 
 	### notes
 	# handles single values, single points, or arrays of points
-	# arrays (both 1D and 2D) must be numpy arrays
+	# dbox can be single value or ndim-element array
+	# arrays must be numpy arrays
 
 	return r - dbox*np.round(r/dbox)
 

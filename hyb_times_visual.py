@@ -57,7 +57,7 @@ def main():
 	time_avg_type = args.time_avg_type
 	status_avg_type = args.status_avg_type
 
-	### check input
+	### check on oxDNA files
 	if topFile is not None and confFile is not None:
 		position_src = 'oxdna'
 	else:
@@ -332,11 +332,13 @@ def propScafToStapSingle(prop_scaf, strands, complements, avg_type):
 
 ### get geometry data ready for visualization
 def prepGeoData(r):
+	n_padBox = 2
 
 	### box diameter
-	dbox3 = [ max(abs(r[:,0]))+2.72, max(abs(r[:,1]))+2.4, max(abs(r[:,2]))+2.4 ]
+	dbox3 = [ max(abs(r[:,0]))+n_padBox*2.4, max(abs(r[:,1]))+n_padBox*2.4, max(abs(r[:,2]))+n_padBox*2.72 ]
 	dbox3 = [ 2*i for i in dbox3 ]
 
+	### results
 	return dbox3
 
 
