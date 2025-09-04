@@ -51,19 +51,7 @@ def main():
 
 	### get random seeds
 	if astapFile is not None:
-		if copiesFile is not None:
-			rseeds = utils.readCopies(copiesFile, True)[1]
-			if rseeds.count(None):
-				print("Flag: St least one random seed missing in copies file, using default random seed.")
-				if rseed is None:
-					print("Flag: Default random seed not set, using 1 for random seed.")
-					rseed = 1
-				rseeds = [rseed if x is None else x for x in rseeds]
-		else
-			if rseed is None:
-				print("Flag: Default random seed not set, using 1 for random seed.")
-				rseed = 1
-			rseeds = [rseed]
+		rseeds = utils.getRseeds(copiesFile, rseed)
 
 	### loop over simulations
 	for i in range(nsim):
@@ -180,9 +168,11 @@ def readAstap(astapFile, nstrand):
 	is_add_strand = [ False for i in range(nstrand) ]
 
 	### read add staples file
-	ars.testFileExist(astapFile,"add staples")
-	with open(astapFile,'r') as f:
-		add_strands = [ int(line.strip()) for line in f ]
+	ars.testFileExist(astapFile, "add staples")
+	with open(astapFile, 'r') as f:
+		content = f.readlines()
+	content = ars.cleanFileContent(content)
+	add_strands = [ int(line) for line in content ]
 	for si in range(len(add_strands)):
 		is_add_strand[add_strands[si]-1] = True
 

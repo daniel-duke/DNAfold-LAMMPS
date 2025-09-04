@@ -1,16 +1,15 @@
+import armament as ars
 import numpy as np
 import sys
 
 class parameters:
 
 	### initialize
-	def __init__( self, params):
+	def __init__(self, params):
 
 		### set parameters
 		self.rseed = params['rseed']
 		self.rng = np.random.default_rng(params['rseed'])
-		self.rseed_mis = params['rseed_mis']
-		self.rng_mis = np.random.default_rng(params['rseed_mis'])
 		self.nstep = params['nstep']
 		self.nstep_relax = params['nstep_relax']
 		self.dump_every = params['dump_every']
@@ -18,6 +17,7 @@ class parameters:
 		self.dbox = params['dbox']
 		self.stap_copies = params['stap_copies']
 		self.circularScaf = params['circularScaf']
+		self.scaf_shift = params['scaf_shift']
 		self.reserveStap = params['reserveStap']
 		self.forceBind = params['forceBind']
 		self.startBound = params['startBound']
@@ -25,6 +25,8 @@ class parameters:
 		self.ncompFactor = params['ncompFactor']
 		self.optCompFactors = params['optCompFactors']
 		self.optCompEfunc = params['optCompEfunc']
+		self.rseed_mis = params['rseed_mis']
+		self.rng_mis = np.random.default_rng(params['rseed_mis'])
 		self.bridgeEnds = params['bridgeEnds']
 		self.dehyb = params['dehyb']
 		self.debug = params['debug']
@@ -57,8 +59,8 @@ class parameters:
 		if self.forceBind and self.dehyb:
 			print("Flag: Dehybridization useless when force binding, removing dehybridization.")
 			self.dehyb = False
-		### check force binding and staple copies
 
+		### check force binding and staple copies
 		if self.forceBind and self.stap_copies > 1:
 			print("Flag: Multiple staple copies useless when force binding, using only 1 staple copy.")
 			self.forceBind = False
@@ -68,24 +70,31 @@ class parameters:
 			print("Flag: Misbinding useless when force binding, removing misbinding.")
 			self.nmisBound = 0
 
-		### check number fo complementary factors
+		### check number of complementary factors
 		if self.nmisBond == 0 and self.ncompFactor > 1:
 			print("Flag: Since no misbinding, setting number of complementary factors to 1.")
 			self.ncompFactor = 1
 
-		### check number fo complementary factors
+		### check number of complementary factors
 		if self.nmisBond > 0 and self.ncompFactor <= 1:
-			print("Flag: if including misbinding, number of complementary factors must be >1, setting to 2.")
+			print("Flag: If including misbinding, number of complementary factors must be >1, setting to 2.")
 			self.ncompFactor = 2
 
-		### check number fo complementary factors
-		if self.bridgeEnds == True:
+		### check end bridging
+		if self.bridgeEnds:
 			print("Flag: End bridging reactions do not work, proceed with caution.")
+
+		### check scaffold shift
+		if self.circularScaf and self.scaf_shift != 0:
+			print("Flag: If circular scaffold, scaffold should not be shifted (to reduce ambiguity), setting to 0.")
+			self.scaf_shift = 0
 	
 
 	### record values
-	def record(self, paramsFile):
-		with open(paramsFile,'w') as f:
+	def record(self, paramsFile, rseeds, rseed_mis):
+		with open(paramsFile, 'w') as f:
+
+			f.write("## Parameters\n")
 			f.write(f"nstep             {self.nstep:0.0f}\n")
 			f.write(f"nstep_relax       {self.nstep_relax:0.0f}\n")
 			f.write(f"dump_every        {self.dump_every:0.0f}\n")
@@ -93,10 +102,10 @@ class parameters:
 			f.write(f"dbox [nm]         {self.dbox:0.2f}\n")
 			f.write(f"stap_copies       {self.stap_copies}\n")
 			f.write(f"circularScaf      {self.circularScaf}\n")
+			f.write(f"scaf_shift        {self.scaf_shift}\n")
 			f.write(f"reserveStap       {self.reserveStap}\n")
 			f.write(f"forceBind         {self.forceBind}\n")
 			f.write(f"startBound        {self.startBound}\n")
-			f.write(f"rseed_mis         {self.rseed_mis:0.0f}\n")
 			f.write(f"nmisBond          {self.nmisBond}\n")
 			f.write(f"ncompFactor       {self.ncompFactor}\n")
 			f.write(f"optCompFactors    {self.optCompFactors}\n")
@@ -104,5 +113,13 @@ class parameters:
 			f.write(f"dehyb             {self.dehyb}\n")
 			f.write(f"T [K]             {self.T}\n")
 			f.write(f"T_relax [K]       {self.T_relax}\n")
-			f.write(f"U_hyb [kcal]      {self.U_hyb/6.96:0.2f}\n")
+			f.write(f"U_hyb [kcal]      {self.U_hyb/6.96:0.2f}\n\n")
+			
+			f.write("## Random Seeds\n")
+			f.write(f"rseeds            {ars.compressSeqArr(rseeds)}\n")
+			if rseed_mis is None:
+				f.write(f"rseed_mis         {ars.compressSeqArr(rseeds)}")
+			else:
+				f.write(f"rseed_mis         {rseed_mis}")
+
 

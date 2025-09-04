@@ -33,9 +33,11 @@ def main():
 	parser.add_argument('--doAlignment',	type=int,	default=False,	help='whether to align the principal axes of the scaffold with the simulation box when sufficiently folded')
 	parser.add_argument('--align_type',		type=str,	default='rmsd',	help='if aligning, what method to use (rmsd, pcs)')
 	parser.add_argument('--align_cut',		type=float,	default=0.8,	help='if aligning, fraction of native scaffold hybridizations required to deem the scaffold "sufficiently folded"')
+	parser.add_argument('--axis_thetas',	type=arr,	default=0,		help='if aligning, rotation angles (in degrees) of the aligned positions about the three coordinate axes (x,y,z)')
 	parser.add_argument('--cadFile',		type=str,	default=None,	help='if aligning by RMSD, name of caDNAno file, for initializing positions')
 	parser.add_argument('--topFile',		type=str, 	default=None,	help='if aligning by RMSD and using oxdna positions, name of topology file')
 	parser.add_argument('--confFile',		type=str, 	default=None,	help='if aligning by RMSD and using oxdna positions, name of conformation file')
+	parser.add_argument('--coarse_time',	type=int,	default=1,		help='if unifying or aligning, coarse factor for time steps')
 	parser.add_argument('--hideStap',		type=int,	default=False,	help='whether to hide all staples from view, only showing scaffold')
 	parser.add_argument('--win_render',		type=str,	default='none',	help='what window to render (none, front, side_ortho, side_perspec, corner)')
 	parser.add_argument('--frame_rate',		type=float,	default=10,		help='if rendering, frame rate of movie (frames per second)')
@@ -59,9 +61,11 @@ def main():
 	doAlignment = args.doAlignment
 	align_type = args.align_type
 	align_cut = args.align_cut
+	axis_thetas = args.axis_thetas
 	cadFile = args.cadFile
 	topFile = args.topFile
 	confFile = args.confFile
+	coarse_time = args.coarse_time
 	hideStap = args.hideStap
 	win_render = args.win_render
 	frame_rate = args.frame_rate
@@ -73,6 +77,11 @@ def main():
 	### check input
 	if doAlignment and doUnification:
 		print("Error: Choose either unification (with no alignment) or aligment (which includes unification).\n")
+		sys.exit()
+	if axis_thetas == 0:
+		axis_thetas = np.zeros(3)
+	elif len(axis_thetas) != 3:
+		print("Error: Rotation of ideal positions must be 3 comma-separated values (one rotation for each axis).\n")
 		sys.exit()
 
 	### check for files required for RMSD alignment
@@ -98,15 +107,15 @@ def main():
 
 	### get pickled data
 	connFile = "analysis/connectivity_vars.pkl"
-	strands, complements, n_scaf = readConn(connFile)
+	strands, complements, n_scaf, scaf_shift = readConn(connFile)
 
 	### get ideal positions
 	r_ideal = None
 	if doAlignment and align_type == 'rmsd':
 		if position_src == 'cadnano':
-			r_ideal = utils.initPositionsCaDNAno(cadFile)[0]
+			r_ideal = utils.initPositionsCaDNAno(cadFile, scaf_shift)[0]
 		if position_src == 'oxdna':
-			r_ideal = utils.initPositionsOxDNA(cadFile, topFile, confFile)[0]
+			r_ideal = utils.initPositionsOxDNA(cadFile, topFile, confFile, scaf_shift)[0]
 
 	### initialize pipeline
 	geoFile = simFolds[0] + "analysis/geometry_vis.in"
@@ -137,14 +146,15 @@ def main():
 		if doUnification:
 
 			### read data
-			points, _, dbox, used_every = ars.readAtomDump(datFile, ignorePBC=True, getUsedEvery=True)
+			points, _, dbox, used_every = ars.readAtomDump(datFile, coarse_time=coarse_time, ignorePBC=True, getUsedEvery=True)
 
 			### calculations
 			points_unified = unifyTrajectory(points, dbox, strands, complements, n_scaf, r12_cut_hyb)
+			points_final = rotateAxes(points_unified, axis_thetas)
 
 			### write data
 			outDatFile = simFolds[nsim-i-1] + "analysis/trajectory_unified.dat";
-			writeAtomDump(outDatFile, dbox, points_unified, strands, used_every)
+			writeAtomDump(outDatFile, dbox, points_final, strands, used_every)
 			datFile = outDatFile
 
 		### align trajectory
@@ -152,15 +162,16 @@ def main():
 
 			### read data
 			hybFile = simFolds[nsim-i-1] + "analysis/hyb_status.dat"
-			hyb_status = utils.readHybStatus(hybFile)
-			points, _, dbox, used_every = ars.readAtomDump(datFile, ignorePBC=True, getUsedEvery=True)
+			hyb_status = utils.readHybStatus(hybFile, coarse_time=coarse_time)
+			points, _, dbox, used_every = ars.readAtomDump(datFile, coarse_time=coarse_time, ignorePBC=True, getUsedEvery=True)
 
 			### calculations
 			points_aligned = alignTrajectory(points, hyb_status, dbox, strands, complements, n_scaf, align_type, align_cut, r12_cut_hyb, r_ideal)
+			points_final = rotateAxes(points_aligned, axis_thetas)
 
 			### write data
 			outDatFile = simFolds[nsim-i-1] + "analysis/trajectory_aligned.dat";
-			writeAtomDump(outDatFile, dbox, points_aligned, strands, used_every)
+			writeAtomDump(outDatFile, dbox, points_final, strands, used_every)
 			datFile = outDatFile
 
 		### add trajectory to pipeline
@@ -214,38 +225,38 @@ def main():
 ### Plotters
 
 def plotChords(strands, complements):
-    nbead = len(strands)
+	nbead = len(strands)
 
-    # Find scaffold beads
-    scaffold_indices = np.where(strands==1)[0]
-    n_scaf = len(scaffold_indices)
+	# Find scaffold beads
+	scaffold_indices = np.where(strands==1)[0]
+	n_scaf = len(scaffold_indices)
 
-    # Positions of scaffold around circle
-    theta = np.linspace(0, 2*np.pi, n_scaf, endpoint=False)
-    x = np.cos(theta)
-    y = np.sin(theta)
+	# Positions of scaffold around circle
+	theta = np.linspace(0, 2*np.pi, n_scaf, endpoint=False)
+	x = np.cos(theta)
+	y = np.sin(theta)
 
-    # Prepare plot
-    ars.magicPlot()
-    fig, ax = plt.subplots(figsize=(8,8))
-    ax.set_aspect("equal")
-    ax.axis("off")
+	# Prepare plot
+	ars.magicPlot()
+	fig, ax = plt.subplots(figsize=(8,8))
+	ax.set_aspect("equal")
+	ax.axis("off")
 
-    # Draw scaffold beads
-    ax.scatter(x, y, c="black", s=20, zorder=3)
+	# Draw scaffold beads
+	ax.scatter(x, y, c="black", s=20, zorder=3)
 
-    # Draw backbone connections (staples only)
-    for i in range(nbead - 1):
-        if strands[i] == strands[i+1] and strands[i] != 1:
-            scaf1 = complements[i]
-            scaf2 = complements[i+1]
+	# Draw backbone connections (staples only)
+	for i in range(nbead - 1):
+		if strands[i] == strands[i+1] and strands[i] != 1:
+			scaf1 = complements[i]
+			scaf2 = complements[i+1]
 
-            if scaf1 in scaffold_indices and scaf2 in scaffold_indices:
-                ax.plot([x[scaffold_indices == scaf1][0],
-                         x[scaffold_indices == scaf2][0]],
-                        [y[scaffold_indices == scaf1][0],
-                         y[scaffold_indices == scaf2][0]],
-                        color="grey", alpha=0.6, linewidth=1.0)
+			if scaf1 in scaffold_indices and scaf2 in scaffold_indices:
+				ax.plot([x[scaffold_indices == scaf1][0],
+						 x[scaffold_indices == scaf2][0]],
+						[y[scaffold_indices == scaf1][0],
+						 y[scaffold_indices == scaf2][0]],
+						color="grey", alpha=0.6, linewidth=1.0)
 
 
 ################################################################################
@@ -259,7 +270,9 @@ def readConn(connFile):
 	strands = params['strands']
 	complements = params['complements']
 	n_scaf = params['n_scaf']
-	return strands, complements, n_scaf
+	circularScaf = params['circularScaf']
+	scaf_shift = 0 if circularScaf else params['scaf_shift']
+	return strands, complements, n_scaf, scaf_shift
 
 
 ### write lammps-style atom dump
@@ -412,6 +425,54 @@ def alignTrajectory(points, hyb_status, dbox, strands, complements, n_scaf, alig
 
 	### result
 	return points_unified
+
+
+################################################################################
+### Calculation Managers
+
+### define float array argument
+def arr(arg):
+	return list(map(float, arg.split(',')))
+
+
+### apply rotations about the coordinate axes
+def rotateAxes(points, thetas, extrinsic=False):
+
+	### notes
+	# this function maintains the row-vector convention throughout all the
+	  # calculations; in practice ,this means the 2D transformation matrix is
+	  # the transpose of the standard (column-vector) version, and the order
+	  # of extrinsic vs intrinsic matrix multiplications is swapped.
+	# by default, this code uses intrinsic rotations, simply because they are
+	  # easier to visualize.
+	# this code uses the x-y'-z'' order of rotations, which does not match any
+	  # standard convention, simply because x-axis rotations are the most likely
+	  # to be desired and z-axis rotations are the least likely.
+
+	### initialize
+	R_total = np.eye(3)
+	axes = np.arange(3)
+
+	### loop over axes
+	for axis, theta in enumerate(thetas):
+		i,j = np.roll(axes,-axis)[1:]
+		theta_rad = np.deg2rad(theta)
+		R = np.eye(3)
+
+		### rotation matrix
+		R[i,i] = np.cos(theta_rad)
+		R[i,j] = np.sin(theta_rad)
+		R[j,i] = -np.sin(theta_rad)
+		R[j,j] = np.cos(theta_rad)
+
+		### add rotation
+		if not extrinsic:
+			R_total = R @ R_total
+		else:
+			R_total = R_total @ R
+
+	### result
+	return points @ R_total
 
 
 ### run the script

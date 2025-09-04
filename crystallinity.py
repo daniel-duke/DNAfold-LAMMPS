@@ -100,10 +100,10 @@ def main():
 
 		### get pickled data
 		connFile = "analysis/connectivity_vars.pkl"
-		n_scaf = readConn(connFile)
+		n_scaf, scaf_shift = readConn(connFile)
 
 		### get ideal positions
-		if doRMSD: r_ideal = utils.initPositionsCaDNAno(cadFile)[0][:n_scaf]
+		if doRMSD: r_ideal = utils.initPositionsCaDNAno(cadFile, scaf_shift)[0][:n_scaf]
 
 		### get minimum number of steps
 		nstep_allSim = np.zeros(nsim,dtype=int)
@@ -320,7 +320,9 @@ def readConn(connFile):
 	with open(connFile, 'rb') as f:
 		params = pickle.load(f)
 	n_scaf = params['n_scaf']
-	return n_scaf
+	circularScaf = params['circularScaf']
+	scaf_shift = 0 if circularScaf else params['scaf_shift']
+	return n_scaf, scaf_shift
 
 
 ################################################################################

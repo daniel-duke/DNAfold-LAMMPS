@@ -34,6 +34,7 @@ def main():
 	parser.add_argument('--coarse_time',	type=int,	default=1,		help='coarse factor for time steps')
 	parser.add_argument('--nstep_max',		type=float,	default=0,		help='max number of recorded steps to use, excluding initial frame (0 for all)')
 	parser.add_argument('--misFile',		type=str,	default=None,	help='name of misbinding file, which contains cutoffs and energies')
+	parser.add_argument('--scaf_shift',		type=int,	default=0,		help='if linear scaffold, bead shift for cut location (only stored, not used for calculation)')
 
 	### analysis parameters
 	center = 1						# what to place at center (1 for scaffold)
@@ -51,6 +52,7 @@ def main():
 	coarse_time = args.coarse_time
 	nstep_max = int(args.nstep_max)
 	misFile = args.misFile
+	scaf_shift = args.scaf_shift
 
 	### interpret input
 	if nstep_max == 0:
@@ -71,10 +73,17 @@ def main():
 	geoFile = simFolds[0] + geoFileName
 	strands, bonds_backbone, complements, compFactors, n_scaf, nbead, circularScaf = processGeo(geoFile)
 
+	### scaffold cut warning
+	if circularScaf and scaf_shift != 0:
+		print("Flag: Detected circular scaffold, setting scaffold cut location to 0.")
+		scaf_shift = 0
+	if not circularScaf and scaf_shift == 0:
+		print("Flag: Detected linear scaffold, but using default scaffold cut location (make sure this is correct).")
+
 	### write conectivity vars
 	ars.createSafeFold("analysis")
 	outConnFile = "analysis/connectivity_vars.pkl"
-	writeConn(outConnFile, strands, bonds_backbone, complements, compFactors, n_scaf, nbead, circularScaf)
+	writeConn(outConnFile, strands, bonds_backbone, complements, compFactors, n_scaf, nbead, circularScaf, scaf_shift)
 
 	### assemble data params
 	params = []
@@ -139,7 +148,7 @@ def processGeo(geoFile):
 	complements = getComplements(extras, n_scaf, nbead)
 
 	### get backbone bonds
-	bonds_backbone = bonds[ (bonds[:,0]==1) | (bonds[:,0]==3) ]
+	bonds_backbone = bonds[bonds[:,0]!=2]
 
 	### determine if scaffold is circular
 	circularScaf = True if np.sum(bonds_backbone[:,1]<=n_scaf)==n_scaf else False
@@ -149,7 +158,7 @@ def processGeo(geoFile):
 
 
 ### write connectivity vars pickle file
-def writeConn(outConnFile, strands, bonds_backbone, complements, compFactors, n_scaf, nbead, circularScaf):
+def writeConn(outConnFile, strands, bonds_backbone, complements, compFactors, n_scaf, nbead, circularScaf, scaf_shift):
 	params = {}
 	params['strands'] = strands
 	params['bonds_backbone'] = bonds_backbone
@@ -158,6 +167,7 @@ def writeConn(outConnFile, strands, bonds_backbone, complements, compFactors, n_
 	params['n_scaf'] = n_scaf
 	params['nbead'] = nbead
 	params['circularScaf'] = circularScaf
+	params['scaf_shift'] = scaf_shift
 	with open(outConnFile, 'wb') as f:
 		pickle.dump(params, f)
 

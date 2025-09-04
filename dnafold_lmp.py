@@ -32,7 +32,7 @@ import os
 
 # Eventual To Do
 # find optimal tradeoff between commuication cutoff and bond break, parameterize
-  # 90 degree angular potential, reactions that shortens crossover bond length, 
+  # 90 degree angular potential, reactions that shortens crossover bond length,
   # figure out bridging reactions
 
 
@@ -48,25 +48,26 @@ def main():
 	if useDanielFiles:
 
 		### chose design
-		desID = "16HB4x1x2_btwS"				# design identification
+		desID = "2HBx4"				# design identification
 		simTag = ""					# appended to desID to get name of output folder
-		simType = "production/linearScafAdd"		# prepended to desID to get name of output folder within standard location
+		simType = "experiment"		# prepended to desID to get name of output folder within standard location
 		rstapTag = None				# tag for reserved staples file (None for not reserving staples)
 		confTag = None				# if starting bound, tag for oxDNA configuration file (None for caDNAno positions)
-		rseed = 1					# random seed for positions and LAMMPS, also used for naming simulation folders
-		rseed_mis = 1				# random seed for misbinding, specifically sequence generation and position initialization
-		nsim = 30					# number of simulations, starting with given random seed and incrementing by 1 for each simulation
+		rseed = 1					# random seed, used for initializing positions and LAMMPS thermostat, also used for naming simulation folders
+		nsim = 10					# number of simulations, starting with given random seed and incrementing by 1 for each simulation
 
 		### choose parameters
-		nstep			= 1E8		# steps		- number of simulation steps
-		nstep_relax		= 1E5		# steps		- number of steps for relaxation
-		dump_every		= 1E5		# steps		- number of steps between positions dumps
-		dbox			= 60		# nm		- periodic boundary diameter
-		stap_copies		= 1 		# int		- number of copies for each staples
-		circularScaf	= False		# bool		- whether the scaffold is circular
-		forceBind		= False		# bool		- whether to force hybridization
+		nstep			= 1E7		# steps		- number of production steps
+		nstep_relax		= 1E5		# steps		- number of relaxation steps
+		dump_every		= 1E4		# steps		- number of steps between positions dumps
+		dbox			= 40		# nm		- periodic boundary diameter
+		stap_copies		= 1 		# int		- number of copies for each staple
+		circularScaf	= True		# bool		- whether the scaffold is circular
+		scaf_shift		= 0			# int		- if linear scaffold, bead shift for cut location (3' end chasing 5' end)
+		forceBind		= False		# bool		- whether to force hybridization (not applied if >1 staple copies)
 		startBound		= False		# bool		- whether to start at caDNAno positions
 		nmisBond		= 0			# int		- number of misbinding levels (0 for no misbinding)
+		rseed_mis 		= None			# int		- random seed for misbinding
 
 		### get input files
 		cadFile = utilsLocal.getCadFile(desID)
@@ -74,7 +75,7 @@ def main():
 		oxFiles = utilsLocal.getOxFiles(desID, confTag) if confTag is not None else None
 
 		### set parameters
-		cadFile, rstapFile, oxFiles, p = readInput(None, rseed, rseed_mis, cadFile, rstapFile, oxFiles, nstep, nstep_relax, dump_every, dbox, stap_copies, circularScaf, forceBind, startBound, nmisBond)
+		cadFile, rstapFile, oxFiles, p = readInput(None, rseed, cadFile, rstapFile, oxFiles, nstep, nstep_relax, dump_every, dbox, stap_copies, circularScaf, scaf_shift, forceBind, startBound, nmisBond, rseed_mis)
 		
 		### set output folder
 		outFold = utilsLocal.getSimHomeFold(desID, simTag, simType)
@@ -82,6 +83,9 @@ def main():
 
 		### set simulation folders
 		outSimFolds = utilsLocal.writeCopies(outFold, p.rseed, nsim)
+
+		### set random seeds
+		rseeds = np.arange(rseed,rseed+nsim)
 
 		### copy design files to output folder
 		outCadFile = outFold + desID + ".json"
@@ -97,9 +101,8 @@ def main():
 		parser = argparse.ArgumentParser()
 		parser.add_argument('--inFile',		type=str,	required=True,	help='name of input file, which contains file names and parameters')
 		parser.add_argument('--copiesFile',	type=str,	default=None,	help='name of copies file (first column - simulation folder names; second (optional) column - random seeds)')
-		parser.add_argument('--simFold',	type=str,	default=None,	help='name of simulation folder, used if no copies file, defaults to current folder')
-		parser.add_argument('--rseed',		type=int,	default=1,		help='random seed for positions and LAMMPS (also used for naming simulation folder)')
-		parser.add_argument('--rseed_mis',	type=int,	default=1,		help='random seed for misbinding')
+		parser.add_argument('--simFold',	type=str,	default=None,	help='name of simulation folder, only used if no copies file, defaults to current folder')
+		parser.add_argument('--rseed',		type=int,	default=None,	help='random seed, for initializing positions and LAMMPS thermostat, only used if copies file does not contain random seeds')
 		
 		### set arguments
 		args = parser.parse_args()
@@ -107,10 +110,9 @@ def main():
 		copiesFile = args.copiesFile
 		simFold = args.simFold
 		rseed = args.rseed
-		rseed_mis = args.rseed_mis
 
 		### set parameters
-		cadFile, rstapFile, oxFiles, p = readInput(inFile, rseed, rseed_mis)
+		cadFile, rstapFile, oxFiles, p = readInput(inFile, rseed)
 
 		### set output folder
 		outFold = "./"
@@ -118,13 +120,17 @@ def main():
 		### set simulation folders
 		outSimFolds, nsim = utils.getSimFolds(copiesFile, simFold)
 
+		### set random seeds
+		rseeds = utils.getRseeds(copiesFile, rseed)
+		
 
 ################################################################################
 ### Heart
 
-	### read caDNAno file
+	### read caDNAno file and build DNAfold model
 	strands, backbone_neighbors, complements, is_crossover, p = buildDNAfoldModel(cadFile, p)
-
+	complements, is_crossover = shiftScaffold(complements, is_crossover, p)
+	
 	### read reserved staples file
 	is_reserved_strand = readRstap(rstapFile, p)
 
@@ -133,7 +139,7 @@ def main():
 
 	### record parameters
 	paramsFile = outFold + "parameters.txt"
-	p.record(paramsFile)
+	p.record(paramsFile, rseeds, rseed_mis)
 
 	### record misbinding cutoffs and energies
 	outMisFile = outFold + "misbinding.txt"
@@ -141,7 +147,15 @@ def main():
 	
 	### loop over simulations
 	for i in range(nsim):
-		p.rseed = rseed + i
+
+		### adjust random seed
+		p.rseed = rseeds[i]
+		p.rng = np.random.default_rng(p.rseed)
+
+		### adjust misbinding random seed
+		if rseed_mis == None:
+			p.rseed_mis = rseeds[i]
+			p.rng_mis = np.random.default_rng(p.rseed_mis)
 
 		### create simulation folder
 		outSimFold = outSimFolds[i]; print()
@@ -170,14 +184,14 @@ def main():
 ### File Handlers
 
 ### read input file
-def readInput(inFile=None, rseed=1, rseed_mis=1, cadFile=None, rstapFile=None, oxFiles=None, nstep=None, nstep_relax=1E5, dump_every=1E4, dbox=None, stap_copies=1, circularScaf=True, forceBind=False, startBound=False, nmisBond=0):
+def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, oxFiles=None, nstep=None, nstep_relax=1E5, dump_every=1E4, dbox=None, stap_copies=1, circularScaf=True, scaf_shift=0, forceBind=False, startBound=False, nmisBond=0, rseed_mis=1):
 
 	### set oxDNA files
 	topFile = oxFiles[0] if oxFiles is not None else None
 	confFile = oxFiles[1] if oxFiles is not None else None
 
 	### list keys that can have 'None' as their final value
-	allow_none_default = {'rstapFile','topFile','confFile'}
+	allow_none_default = {'rstapFile','topFile','confFile','rseed_mis'}
 
 	### define parameters with their default values
 	param_defaults = {
@@ -185,24 +199,26 @@ def readInput(inFile=None, rseed=1, rseed_mis=1, cadFile=None, rstapFile=None, o
 		'rstapFile':		rstapFile,		# str			- name of reserved staples file
 		'topFile':			topFile,		# str			- name of topology file
 		'confFile':			confFile,		# str			- name of configuration file
-		'nstep': 			nstep,			# steps			- number of simulation steps (required)
-		'nstep_relax': 		nstep_relax,	# steps			- number of steps for relaxation
+		'nstep': 			nstep,			# steps			- number of production steps (required)
+		'nstep_relax': 		nstep_relax,	# steps			- number of relaxation steps
 		'dump_every': 		dump_every,		# steps			- number of steps between positions dumps
 		'dt': 				0.01,			# ns			- integration time step
 		'dbox': 			dbox,			# nm			- periodic boundary diameter (required)
-		'stap_copies': 		stap_copies,	# int			- number of copies for each staples
+		'stap_copies': 		stap_copies,	# int			- number of copies for each staple
 		'circularScaf':		circularScaf,	# bool			- whether the scaffold is circular
+		'scaf_shift':		scaf_shift,		# int			- if linear scaffold, bead shift for cut location (3' end chasing 5' end)
 		'forceBind': 		forceBind,		# bool			- whether to force hybridization (not applied if >1 staple copies)
 		'startBound': 		startBound,		# bool			- whether to start at caDNAno positions
 		'nmisBond': 		nmisBond,		# int			- number of misbinding levels (0 for no misbinding)
 		'ncompFactor':		2,				# int			- number of complementary factors (set to 1 if no misbinding)
 		'optCompFactors': 	False,			# bool			- whether to optimize complementary factors for misbinding
 		'optCompEfunc': 	False,			# bool			- whether to optimize energy function for misbinding
+		'rseed_mis': 		rseed_mis,		# int			- random seed for misbinding
 		'bridgeEnds':		False,			# bool			- whether to include end bridging reactions (if applicable)
 		'dehyb': 			True,			# bool			- whether to include dehybridization reactions
 		'debug': 			False,			# bool			- whether to include debugging output
 		'T':				300,			# K				- temperature
-		'T_relax':			600,			# K				- temperature for relaxation
+		'T_relax':			600,			# K				- temperature for relaxation (set to 300 if starting bound)
 		'r_h_bead':			1.28,			# nm			- hydrodynamic radius of single bead
 		'visc':				0.8472,			# mPa/s			- viscosity (units equivalent to pN*ns/mn^2)
 		'sigma':			2.14,			# nm			- bead Van der Waals radius
@@ -230,12 +246,14 @@ def readInput(inFile=None, rseed=1, rseed_mis=1, cadFile=None, rstapFile=None, o
 		'dbox':				float,
 		'stap_copies':		int,
 		'circularScaf':		lambda x: x.lower() == 'true',
+		'scaf_shift':		int,
 		'forceBind':		lambda x: x.lower() == 'true',
 		'startBound':		lambda x: x.lower() == 'true',
 		'nmisBond':			int,
 		'ncompFactor':		int,
 		'optCompFactors':	lambda x: x.lower() == 'true',
 		'optCompEfunc':		lambda x: x.lower() == 'true',
+		'rseed_mis':		int,
 		'bridgeEnds':		lambda x: x.lower() == 'true',
 		'dehyb':			lambda x: x.lower() == 'true',
 		'debug':			lambda x: x.lower() == 'true',
@@ -311,9 +329,9 @@ def readInput(inFile=None, rseed=1, rseed_mis=1, cadFile=None, rstapFile=None, o
 	if confFile is not None and not startBound:
 		print("Flag: oxDNA configuration file given but not used.")
 
-	### oxDNA files
+	### set oxDNA files
 	if topFile is not None and confFile is not None:
-		oxFiles = [topFile,confFile]
+		oxFiles = [topFile, confFile]
 	elif topFile is not None:
 		print("Flag: oxDNA topology file given without configuration file, not using.")
 	elif confFile is not None:
@@ -327,9 +345,8 @@ def readInput(inFile=None, rseed=1, rseed_mis=1, cadFile=None, rstapFile=None, o
 	if params['startBound'] == True:
 		params['T_relax'] = 300
 
-	### add parameters not set though input file
+	### add random seed
 	params['rseed'] = rseed
-	params['rseed_mis'] = rseed_mis
 
 	### convert into parameters class and return
 	p = parameters.parameters(params)
@@ -742,7 +759,7 @@ def writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_
 		### production
 		f.write(
 			"## Production\n"
-		   f"fix             tstat1 mobile langevin {p.T} {p.T} {1/p.gamma_t:0.4f} {p.rseed}\n"
+		   f"fix             tstat1 mobile langevin {p.T} {p.T+40} {1/p.gamma_t:0.4f} {p.rseed}\n"
 			"fix             tstat2 mobile nve\n"
 		   f"timestep        {p.dt}\n"
 		   f"dump            dump1 real custom {int(p.dump_every)} trajectory.dat id mol xs ys zs\n"
@@ -2845,7 +2862,7 @@ def buildDNAfoldModel(cadFile, p):
 	### strand count
 	p.nstrand = max(strands)+1
 
-	### return results			
+	### return results
 	return strands, backbone_neighbors, complements, is_crossover, p
 
 
@@ -2915,7 +2932,7 @@ def parseCaDNAno(cadFile):
 		print("Error: Scaffold 5' end not found.\n")
 		sys.exit()
 	
-	### report
+	### result
 	print(f"Found {nnt_scaf} scaffold nucleotides and {nnt_stap} staple nucleotides.")
 	return scaffold, staples, fiveP_end_scaf, fiveP_ends_stap, nnt_scaf, nnt_stap
 
@@ -2929,6 +2946,28 @@ def find(strand, index, list):
 			return i
 	print("Error: Index not found in strand/index list.\n")
 	sys.exit()
+
+
+### adjust for scaffold cut location
+def shiftScaffold(complements, is_crossover, p):
+
+	### only for linear scaffolds with nonzero shift
+	if not p.circularScaf and p.scaf_shift != 0:
+
+		### adjust complements
+		complements_original = copy.deepcopy(complements)
+		for i in range(p.n_scaf):
+			complements[i] = complements_original[ np.mod(i+p.scaf_shift, p.n_scaf) ]
+		for i in range(p.n_scaf,p.n_ori):
+			complements[i] = np.mod(complements_original[i]-p.scaf_shift, p.n_scaf)
+
+		### adjust crossover
+		is_crossover_original = copy.deepcopy(is_crossover)
+		for i in range(p.n_scaf):
+			is_crossover[i] = is_crossover_original[ np.mod(i+p.scaf_shift, p.n_scaf) ]
+
+	### result
+	return complements, is_crossover
 
 
 ### run the script

@@ -4,6 +4,7 @@ import argparse
 import matplotlib.pyplot as plt
 import numpy as np
 import pickle
+import copy
 import sys
 
 ## Description
@@ -25,7 +26,6 @@ def main():
 	parser.add_argument('--nstep_skip',		type=float,	default=0,		help='number of recorded initial steps to skip')
 	parser.add_argument('--coarse_time',	type=int,	default=1,		help='coarse factor for time steps')
 	parser.add_argument('--nstep_max',		type=float,	default=0,		help='max number of recorded steps to use, excluding initial frame (0 for all)')
-	parser.add_argument('--mov_avg_stride',	type=int,	default=1,		help='stride length for moving average, used for derivative')
 	parser.add_argument('--misFile',		type=str,	default=None,	help='name of misbinding file, which contains cutoffs and energies')
 	parser.add_argument('--saveFig',		type=int,	default=False,	help='whether to save pdf of figures')
 
@@ -39,12 +39,12 @@ def main():
 	misFile = args.misFile
 	saveFig = args.saveFig
 
-	### get simulation folders
-	simFolds, nsim = utils.getSimFolds(copiesFile, simFold)
-
 
 ################################################################################
 ### Heart
+
+	### get simulation folders
+	simFolds, nsim = utils.getSimFolds(copiesFile, simFold)
 
 	### get pickled data
 	connFile = "analysis/connectivity_vars.pkl"
@@ -125,7 +125,7 @@ def plotKinetics(hyb_status_allSim, strands, n_scaf, used_every, includeMis=Fals
 	figLabel = "Kinetics" if not includeMis else "Mis Kinetics"
 
 	### calculations
-	conc_avg, conc_sem, conc_min = calcKinetics(hyb_status_allSim, strands, n_scaf)
+	conc_avg, conc_sem, conc_min = calcKinetics(hyb_status_allSim, strands, n_scaf, includeMis)
 	error_min = np.maximum(conc_avg - conc_sem, conc_min*np.ones(nstep))
 	error_max = conc_avg + conc_sem
 	time = utils.getTime(nstep, used_every)
@@ -188,7 +188,7 @@ def plotNmis(hyb_status_allSim, n_scaf, used_every, misFile):
 	ars.magicPlot()
 	plt.figure("N Mis")
 	for m in range(nmisBond):
-		plt.plot(time, n_hyb_avg[m], label=f'$U = {Us_mis[m]:0.2f}$')
+		plt.plot(time, n_mis_avg[m], label=f'$U = {Us_mis[m]:0.2f}$')
 		if nsim > 1: plt.fill_between(time, error_min[m], error_max[m], alpha=0.3)
 	plt.xlabel("Time [s]")
 	plt.ylabel("N\\textsubscript{mis}")
@@ -216,7 +216,9 @@ def readConn(connFile):
 
 ### calculate free staple concentrations
 def calcKinetics(hyb_status_allSim, strands, n_scaf, includeMis=False):
-	if includeMis: hyb_status_allSim[hyb_status_allSim>1] = 1
+	if includeMis:
+		hyb_status_allSim = copy.deepcopy(hyb_status_allSim)
+		hyb_status_allSim[hyb_status_allSim>1] = 1
 	nsim = hyb_status_allSim.shape[0]
 	nstep = hyb_status_allSim.shape[1]
 	nbead = hyb_status_allSim.shape[2]
@@ -238,7 +240,9 @@ def calcKinetics(hyb_status_allSim, strands, n_scaf, includeMis=False):
 
 ### calculate number of hybridizations
 def calcNhyb(hyb_status_allSim, n_scaf, includeMis=False):
-	if includeMis: hyb_status_allSim[hyb_status_allSim>1] = 1
+	if includeMis: 
+		hyb_status_allSim = copy.deepcopy(hyb_status_allSim)
+		hyb_status_allSim[hyb_status_allSim>1] = 1
 	nstep = hyb_status_allSim.shape[1]
 	n_hyb_avg = np.zeros(nstep)
 	n_hyb_sem = np.zeros(nstep)
@@ -255,8 +259,8 @@ def calcNmis(hyb_status_allSim, n_scaf, nmisBond):
 	n_mis_avg = np.zeros((nmisBond,nstep))
 	n_mis_sem = np.zeros((nmisBond,nstep))
 	for m in range(nmisBond):
+		hyb_val = 1+(m+1)/100
 		for i in range(nstep):
-			hyb_val = 1+(m+1)/100
 			n_mis_indiv = np.sum(hyb_status_allSim[:,i,:n_scaf]==hyb_val,axis=1)
 			n_mis_avg[m,i] = np.mean(n_mis_indiv)
 			n_mis_sem[m,i] = ars.calcSEM(n_mis_indiv)

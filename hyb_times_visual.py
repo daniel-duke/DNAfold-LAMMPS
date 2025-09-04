@@ -57,6 +57,10 @@ def main():
 	time_avg_type = args.time_avg_type
 	status_avg_type = args.status_avg_type
 
+	### interpret input
+	if copiesFile is None:
+		writeIndiv = True
+
 	### check on oxDNA files
 	if topFile is not None and confFile is not None:
 		position_src = 'oxdna'
@@ -76,13 +80,13 @@ def main():
 
 	### get pickled data
 	connFile = "analysis/connectivity_vars.pkl"
-	strands, bonds_backbone, complements, n_scaf, nbead = readConn(connFile)
+	strands, bonds_backbone, complements, n_scaf, nbead, scaf_shift = readConn(connFile)
 
 	### prepare position data
 	if position_src == 'cadnano':
-		r = utils.initPositionsCaDNAno(cadFile)[0]
+		r = utils.initPositionsCaDNAno(cadFile, scaf_shift)[0]
 	if position_src == 'oxdna':
-		r = utils.initPositionsOxDNA(cadFile, topFile, confFile)[0]
+		r = utils.initPositionsOxDNA(cadFile, topFile, confFile, scaf_shift)[0]
 	dbox3 = prepGeoData(r)
 
 	### get minimum number of steps
@@ -232,7 +236,9 @@ def readConn(connFile):
 	complements = params['complements']
 	n_scaf = params['n_scaf']
 	nbead = params['nbead']
-	return strands, bonds_backbone, complements, n_scaf, nbead
+	circularScaf = params['circularScaf']
+	scaf_shift = 0 if circularScaf else params['scaf_shift']
+	return strands, bonds_backbone, complements, n_scaf, nbead, scaf_shift
 
 
 ################################################################################

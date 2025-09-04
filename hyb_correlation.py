@@ -107,7 +107,7 @@ def main():
 
 		### get pickled data
 		connFile = "analysis/connectivity_vars.pkl"
-		strands, bonds_backbone, complements, n_scaf, nbead = readConn(connFile)
+		strands, bonds_backbone, complements, n_scaf, nbead, scaf_shift = readConn(connFile)
 
 		### get minimum number of steps
 		nstep_allSim = np.zeros(nsim,dtype=int)
@@ -129,8 +129,6 @@ def main():
 			first_hyb_times_scaled_allSim[i] = utils.calcFirstHybTimes(hyb_status, n_scaf)
 			n_hyb_frac_allSim[i] = np.sum(hyb_status==1,axis=1)/n_scaf
 
-
-
 			### calculate crystallinity
 			datFile = simFolds[i] + "analysis/trajectory_centered.dat"
 			points, _, dbox = ars.readAtomDump(datFile, nstep_skip, coarse_time, bdis=-n_scaf, nstep_max=nstep_use)
@@ -139,13 +137,13 @@ def main():
 		### store results
 		resultsFile = "analysis/hyb_correlation_results.pkl"
 		with open(resultsFile, 'wb') as f:
-			pickle.dump([first_hyb_times_scaled_allSim, n_hyb_frac_allSim, S_allSim, strands, bonds_backbone, complements, n_scaf], f)
+			pickle.dump([first_hyb_times_scaled_allSim, n_hyb_frac_allSim, S_allSim, strands, bonds_backbone, complements, n_scaf, scaf_shift], f)
 
 	### load results
 	else:
 		resultsFile = "analysis/hyb_correlation_results.pkl"
-		cucumber = ars.unpickle(resultsFile, [2,2,2,1,2,2,0])
-		[first_hyb_times_scaled_allSim, n_hyb_frac_allSim, S_allSim, strands, bonds_backbone, complements, n_scaf] = cucumber
+		cucumber = ars.unpickle(resultsFile, [2,2,2,1,2,2,0,0])
+		[first_hyb_times_scaled_allSim, n_hyb_frac_allSim, S_allSim, strands, bonds_backbone, complements, n_scaf, scaf_shift] = cucumber
 
 		### trim steps
 		nstep_pkl = S_allSim.shape[1]
@@ -172,9 +170,9 @@ def main():
 	
 	### prepare position data
 	if position_src == 'cadnano':
-		r = utils.initPositionsCaDNAno(cadFile)[0]
+		r = utils.initPositionsCaDNAno(cadFile, scaf_shift)[0]
 	if position_src == 'oxdna':
-		r = utils.initPositionsOxDNA(cadFile, topFile, confFile)[0]
+		r = utils.initPositionsOxDNA(cadFile, topFile, confFile, scaf_shift)[0]
 	r, charges, dbox3 = prepGeoData(r, strands, complements, hybCorr, hybCorr_strand)
 
 	### write geometry and ovito files
@@ -286,7 +284,9 @@ def readConn(connFile):
 	complements = params['complements']
 	n_scaf = params['n_scaf']
 	nbead = params['nbead']
-	return strands, bonds_backbone, complements, n_scaf, nbead
+	circularScaf = params['circularScaf']
+	scaf_shift = 0 if circularScaf else params['scaf_shift']
+	return strands, bonds_backbone, complements, n_scaf, nbead, scaf_shift
 
 
 ################################################################################

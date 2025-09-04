@@ -283,6 +283,7 @@ def readCluster(clusterFile):
 	ars.testFileExist(clusterFile, "cluster")
 	with open(clusterFile, 'r') as f:
 		content = f.readlines()
+	content = ars.cleanFileContent(content)
 	ncluster = int(len(content)/2)
 	clusters = [None]*ncluster
 	for c in range(ncluster):
@@ -291,6 +292,32 @@ def readCluster(clusterFile):
 		for i in range(len(indices)):
 			clusters[c][i] = int(indices[i])
 	return clusters
+
+
+### remove blank lines and comments from file content
+def cleanFileContent(content):
+	cleaned = []
+
+	### loop over lines
+	for line in content:
+
+		### remove leading and trailing whitespaces
+		stripped = line.strip()
+
+		### remove blank lines and whole-line comments
+		if not stripped or stripped.startswith("#"):
+			continue
+
+		### remove in-line comments
+		if "#" in stripped:
+			stripped = stripped.split("#", 1)[0].strip()
+
+		### add meaty line to cleaned content
+		if stripped:
+			cleaned.append(stripped)
+
+	### result
+	return cleaned
 
 
 ### write lammps-style geometry
@@ -473,29 +500,57 @@ def writeGeo(geoFile, dbox3, r, molecules='auto', types='auto', bonds=None, angl
 
 
 ### load array of variables from pickle file
-def unpickle(pklFile, dims=None):
+def unpickle(pklFile, dims=None, hushExtraFlag=False):
+
+	### read file
 	ars.testFileExist(pklFile, "pickle")
 	with open(pklFile, 'rb') as f:
 		cucumber = pickle.load(f)
+
+	### check and trim content
 	if dims is not None:
 		nvar = len(dims)
-		if len(cucumber) != nvar:
-			print("Error: length of pickle file array does not match expected number of variables.\n")
+
+		### make into array if single value
+		if not ars.isarray(cucumber):
+			cucumber = [ cucumber ]
+
+		### make sure pickle array is long enough
+		if len(cucumber) < len(dims):
+			print("Error: pickle array contained fewer elements than expected.\n")
 			sys.exit()
+
+		### trim pickle array if too long
+		elif len(cucumber) > len(sims):
+			if not hushExtraFlag:
+				print("Flag: pickle array contained more elements than expected, ignoring some elements of the pickle array.")
+			cucumber = cucumber[:len(dims)]
+
+		### check variables
 		for i in range(nvar):
+
+			### unknown dimension
 			if dims[i] == None:
 				continue
+
+			### single value expected
 			elif dims[i] == 0:
 				if not ars.isnumber(cucumber[i]):
 					print(f"Error: element {i} of the pickle array does not match the expected data type (number).\n")
 					sys.exit()
+
+			### if not single value, must be array
 			elif not ars.isarray(cucumber[i]):
 				print(f"Error: element {i} of the pickle array does not match the expected data type (array).\n")
 				sys.exit()
+
+			### if numpy array, must have correct shape
 			elif isinstance(cucumber[i], np.ndarray):
 				if len(cucumber[i].shape) != dims[i]:
 					print(f"Error: element {i} of the pickle array does not have the expected shape ({dims[i]}).\n")
 					sys.exit()
+
+	### result
 	return cucumber
 
 
@@ -664,8 +719,8 @@ def centerPointsMolecule(points, molecules, dbox3s, center=1, unwrap=True):
 				points_centered[i,j] = ref + ars.applyPBC(points_centered[i,j]-ref, dbox3s[i])
 
 		### progress update
-		if i%1000 == 0 and i != 0:
-			print(f"Centered {i} steps...")
+		if (i+1)%1000 == 0:
+			print(f"Centered {i+1} steps...")
 
 	### result
 	return points_centered
@@ -877,6 +932,14 @@ def createEmptyFold(newFold):
 	os.makedirs(newFold)
 
 
+### render sequential array compactly
+def compressSeqArr(A):
+    if all(A[i]+1 == A[i+1] for i in range(len(A)-1)):
+        return f"[ {A[0]} ... {A[-1]} ]"
+    else:
+        return str(A)
+
+
 ### test if variable is numeric (both float and integer count)
 def isnumber(x):
 	try:
@@ -886,7 +949,7 @@ def isnumber(x):
 		return False
 
 
-### test if variable is an integer (both python and numpy integers work)
+### test if variable is an integer (both python int and numpy int count)
 def isinteger(x):
 	if isinstance(x, int):
 		return True
@@ -896,7 +959,7 @@ def isinteger(x):
 		return False
 
 
-### check if variable is an array (both list and numpy array work)
+### check if variable is an array (both list and numpy array count)
 def isarray(x):
 	if isinstance(x, list):
 		return True

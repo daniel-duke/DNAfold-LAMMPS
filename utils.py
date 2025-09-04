@@ -6,7 +6,8 @@ import json
 import sys
 
 ## Description
-# this script contains various functions useful for analyzing DNAfold simulations.
+# this script contains various functions useful for running and analysing
+  # DNAfold simulations.
 
 
 ################################################################################
@@ -14,37 +15,89 @@ import sys
 
 ### get simulation folders
 def getSimFolds(copiesFile=None, simFold=None):
+
+	### use copies file by default
 	if copiesFile is not None:
-		copyNames, nsim = readCopies(copiesFile)
+		copyNames = readCopies(copiesFile)[0]
+		nsim = len(copyNames)
+
+		### set simulation folders
 		simFolds = [ copyNames[i] + "/" for i in range(nsim) ]
+
+		### warning if simulation folder also given
 		if simFold is not None:
-			print("Flag: Both copies file and simulation folder defined, using copies file only.")
+			print("Flag: Both copies file and simulation folder given, using copies file only.")
+	
+	### use simulation folder otherwise
 	else:
 		nsim = 1
+
+		### use given folder
 		if simFold is not None:
 			simFolds = [ simFold + "/" ]
+
+		### use current folder
 		else:
 			simFolds = [ "./" ]
+
+	### result
 	return simFolds, nsim
 
 
-### read file containing names of simulation copies
-def readCopies(copiesFile, getRseeds=False):
+### get random seeds
+def getRseeds(copiesFile=None, rseed=None):
+
+	### use copies file by default
+	if copiesFile is not None:
+		rseeds = readCopies(copiesFile)[1]
+		nsim = len(rseeds)
+
+		### set random seeds if not copmpletely defined in copies file
+		if rseeds.count(None):
+			print("Flag: At least one random seed missing in copies file, using range starting from given random seed instead.")
+			
+			### warning if random seed not given
+			if rseed is None:
+				print("Flag: Random seed not given, setting to 1.")
+				rseed = 1
+
+			### set random seeds
+			rseeds = np.arange(rseed, rseed+nsim)
+
+		### warning if rseed also given
+		elif rseed is not None:
+			print("Flag: Copies file fully defines random seeds, not using given random seed.")
+	
+	### use random seed otherwise
+	else:
+
+		### set random seed if not given
+		if rseed is None:
+			print("Flag: Random seed not given, setting to 1.")
+			rseed = 1
+
+		### set random seeds
+		rseeds = [ rseed ]
+
+	### result
+	return rseeds
+
+
+### read file containing simulation folder names and (optionally) random seeds
+def readCopies(copiesFile):
 	ars.testFileExist(copiesFile, "copies")
 	with open(copiesFile, 'r') as f:
 		content = f.readlines()
+	content = ars.cleanFileContent(content)
 	nsim = len(content)
-	simFoldNames = [None]*nsim
-	if getRseeds: rseeds = [None]*nsim
+	copyNames = [None]*nsim
+	rseeds = [None]*nsim
 	for i in range(nsim):
 		line = content[i].split()
-		simFoldNames[i] = line[0]
-		if getRseeds and len(line) > 1:
+		copyNames[i] = line[0]
+		if len(line) > 1:
 			rseeds[i] = int(line[1])
-	if not getRseeds:
-		return simFoldNames, nsim
-	else:
-		return simFoldNames, rseeds, nsim
+	return copyNames, rseeds
 
 
 ### read oxdna configuration
@@ -268,6 +321,12 @@ def calcCrystallinity(points, dbox):
 ### aligning structures for RMSD
 def kabschAlgorithm(r_real, r_ideal, indices='all', getR=False):
 
+	### notes
+	# this version of the Kabsch algorithm matches the wikipedia version, which
+	  # retains the row-vector convention throughout the calculations; other version
+	  # perform the linera algebra with column-vector notation, and others mix them
+	  # and produce incorrect results; but rest assured this one is correct.
+
 	### interpret input
 	if isinstance(indices, str) and indices == 'all':
 		indices = np.arange(len(r_real))
@@ -328,7 +387,7 @@ def calcRMSD(points, r_ideal):
 
 
 ### initialize positions according to caDNAno positions
-def initPositionsCaDNAno(cadFile):
+def initPositionsCaDNAno(cadFile, scaf_shift=0):
 	print("Initializing positions from caDNAno...")
 
 	### parse caDNAno file
@@ -353,12 +412,15 @@ def initPositionsCaDNAno(cadFile):
 	n_scaf = sum(strands==1)
 	r -= np.mean(r[:n_scaf], axis=0)
 
+	### shift scaffold
+	r[:n_scaf] = np.roll(r[:n_scaf], -scaf_shift, axis=0)
+
 	### results
 	return r, strands
 
 
 ### initialize positions according to oxdna configuration file
-def initPositionsOxDNA(cadFile, topFile, confFile):
+def initPositionsOxDNA(cadFile, topFile, confFile, scaf_shift=0):
 	print("Initializing positions from oxDNA...")
 	nnt_bead = 8
 
@@ -422,6 +484,9 @@ def initPositionsOxDNA(cadFile, topFile, confFile):
 			if strand_ox_to_strand[strands_ox_stap[stbi]-1] == strand:
 				r[bi] = r_ox_stap[stbi]
 				bi += 1
+
+	### shift scaffold
+	r[:n_scaf] = np.roll(r[:n_scaf], -scaf_shift, axis=0)
 
 	### center about scaffold
 	r -= np.mean(r[:n_scaf], axis=0)
