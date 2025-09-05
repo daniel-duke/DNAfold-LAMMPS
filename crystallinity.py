@@ -1,4 +1,4 @@
-import armament as ars
+import arsenal as ars
 import utils
 import argparse
 import matplotlib.pyplot as plt
@@ -222,6 +222,7 @@ def main():
 def plotCrystallinity(S_allSim, used_every):
 	nsim = S_allSim.shape[0]
 	nstep = S_allSim.shape[1]
+	plotMedian = False
 	plotSEM = False
 
 	### calculations
@@ -250,16 +251,22 @@ def plotCrystallinity(S_allSim, used_every):
 		for i in range(nsim):
 			color = cmap(norm(ranks[i]))
 			plt.plot(time, S_allSim[i], color=color, linewidth=2, alpha=0.6)
+		if plotMedian:
+			plt.plot(time, S_avg, color='k', linewidth=4)
+		for i in range(nsim):
+			color = cmap(norm(ranks[i]))
 			plt.plot(time[-1], S_allSim[i,-1], 'o', color=color)
-		if plotSEM: plt.fill_between(time, S_avg-S_sem, S_avg+S_sem, color='k', alpha=0.3, edgecolor='none')
-		plt.plot(time, S_avg, color='k', linewidth=4)
-		plt.plot(time[-1], S_avg[-1], 'o', color='k')
+		if plotMedian:
+			plt.plot(time[-1], S_avg[-1], 'o', color='k')
+		if plotSEM:
+			plt.fill_between(time, S_avg-S_sem, S_avg+S_sem, color='k', alpha=0.3, edgecolor='none')
 
 
 ### plot simulation and average crystallinity
 def plotRMSD(RMSD_allSim, used_every):
 	nsim = RMSD_allSim.shape[0]
 	nstep = RMSD_allSim.shape[1]
+	plotMedian = False
 	plotSEM = False
 
 	### calculations
@@ -287,10 +294,15 @@ def plotRMSD(RMSD_allSim, used_every):
 		for i in range(nsim):
 			color = cmap(norm(ranks[i]))
 			plt.plot(time,RMSD_allSim[i], color=color, linewidth=2, alpha=0.6)
+		if plotMedian:
+			plt.plot(time, RMSD_avg, color='k', linewidth=4)
+		for i in range(nsim):
+			color = cmap(norm(ranks[i]))
 			plt.plot(time[-1], RMSD_allSim[i,-1], 'o', color=color)
-		if plotSEM: plt.fill_between(time, RMSD_avg-RMSD_sem, RMSD_avg+RMSD_sem, color='k', alpha=0.3, edgecolor='none')
-		plt.plot(time, RMSD_avg, color='k', linewidth=4)
-		plt.plot(time[-1],RMSD_avg[-1], 'o', color='k')
+		if plotMedian:
+			plt.plot(time[-1],RMSD_avg[-1], 'o', color='k')
+		if plotSEM:
+			plt.fill_between(time, RMSD_avg-RMSD_sem, RMSD_avg+RMSD_sem, color='k', alpha=0.3, edgecolor='none')
 
 
 ### plot average crossing number against crystallinity

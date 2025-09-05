@@ -49,45 +49,54 @@ class parameters:
 		self.n_ori = 0
 		self.nbead = 0
 		self.nstrand = 0
+		self.paramFlag = False
 
 		### check dump frequency
 		if self.dump_every%2 != 0:
 			print("Flag: Dump frequency must be an even number (for write restart purposes), adding 1.")
 			self.dump_every += 1
+			self.paramFlag = True
 
 		### check force binding and dehybridization
 		if self.forceBind and self.dehyb:
 			print("Flag: Dehybridization useless when force binding, removing dehybridization.")
 			self.dehyb = False
+			self.paramFlag = True
 
 		### check force binding and staple copies
 		if self.forceBind and self.stap_copies > 1:
 			print("Flag: Multiple staple copies useless when force binding, using only 1 staple copy.")
 			self.forceBind = False
+			self.paramFlag = True
 
 		### check force binding and misbinding
 		if self.forceBind and self.nmisBound > 0:
 			print("Flag: Misbinding useless when force binding, removing misbinding.")
 			self.nmisBound = 0
+			self.paramFlag = True
 
 		### check number of complementary factors
 		if self.nmisBond == 0 and self.ncompFactor > 1:
 			print("Flag: Since no misbinding, setting number of complementary factors to 1.")
 			self.ncompFactor = 1
+			self.paramFlag = True
 
 		### check number of complementary factors
 		if self.nmisBond > 0 and self.ncompFactor <= 1:
 			print("Flag: If including misbinding, number of complementary factors must be >1, setting to 2.")
 			self.ncompFactor = 2
+			self.paramFlag = True
 
 		### check end bridging
 		if self.bridgeEnds:
 			print("Flag: End bridging reactions do not work, proceed with caution.")
+			self.paramFlag = True
 
 		### check scaffold shift
 		if self.circularScaf and self.scaf_shift != 0:
-			print("Flag: If circular scaffold, scaffold should not be shifted (to reduce ambiguity), setting to 0.")
+			print("Flag: If circular scaffold, scaffold should not be shifted (to reduce ambiguity), setting scaffold shift to 0.")
 			self.scaf_shift = 0
+			self.paramFlag = True
 	
 
 	### record values

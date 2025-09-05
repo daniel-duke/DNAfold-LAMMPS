@@ -31,7 +31,7 @@ def main():
 		desID = "2HBx4"			# design identificaiton
 		confTag = None			# if using oxdna positions, tag for configuration file (None for caDNAno positions)
 		rstapTag = None			# if reserving staples, tag for reserved staples file (None for all staples)
-		circularScaf = False	# whether to add backbone bond between scaffold ends
+		circularScaf = True		# whether to add backbone bond between scaffold ends
 		scaf_shift = 0			# if linear scaffold, bead shift for cut location (3' end chasing 5' end)
 		hideStap = False		# whether to hide all staples from view, only showing scaffold
 		win_render = 'none'		# what window to render as png (none, front, side_ortho, side_perspec, corner)

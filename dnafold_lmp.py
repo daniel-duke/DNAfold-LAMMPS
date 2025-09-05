@@ -42,7 +42,7 @@ import os
 def main():
 
 	### where to get files
-	useDanielFiles = True
+	useDanielFiles = False
 
 	### special code to make Daniel happy
 	if useDanielFiles:
@@ -53,8 +53,8 @@ def main():
 		simType = "experiment"		# prepended to desID to get name of output folder within standard location
 		rstapTag = None				# tag for reserved staples file (None for not reserving staples)
 		confTag = None				# if starting bound, tag for oxDNA configuration file (None for caDNAno positions)
-		rseed = 1					# random seed, used for initializing positions and LAMMPS thermostat, also used for naming simulation folders
-		nsim = 10					# number of simulations, starting with given random seed and incrementing by 1 for each simulation
+		rseed = 6					# random seed, used for initializing positions and LAMMPS thermostat, also used for naming simulation folders
+		nsim = 1					# number of simulations, starting with given random seed and incrementing by 1 for each simulation
 
 		### choose parameters
 		nstep			= 1E7		# steps		- number of production steps
@@ -67,7 +67,7 @@ def main():
 		forceBind		= False		# bool		- whether to force hybridization (not applied if >1 staple copies)
 		startBound		= False		# bool		- whether to start at caDNAno positions
 		nmisBond		= 0			# int		- number of misbinding levels (0 for no misbinding)
-		rseed_mis 		= None			# int		- random seed for misbinding
+		rseed_mis 		= 1			# int		- random seed for misbinding (None to match general random seed)
 
 		### get input files
 		cadFile = utilsLocal.getCadFile(desID)
@@ -179,6 +179,11 @@ def main():
 		### write lammps input file
 		writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_angleAct, nreact_angleDeact, nreact_bridge, nreact_unbridge, p)
 
+	### reminder of any flags
+	if p.paramFlag:
+		print("\n!!! Warning !!!")
+		print("At least one flag was raised when setting parameters.")
+
 
 ################################################################################
 ### File Handlers
@@ -213,7 +218,7 @@ def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, oxFiles=None, 
 		'ncompFactor':		2,				# int			- number of complementary factors (set to 1 if no misbinding)
 		'optCompFactors': 	False,			# bool			- whether to optimize complementary factors for misbinding
 		'optCompEfunc': 	False,			# bool			- whether to optimize energy function for misbinding
-		'rseed_mis': 		rseed_mis,		# int			- random seed for misbinding
+		'rseed_mis': 		rseed_mis,		# int			- random seed for misbinding (None to match general random seed)
 		'bridgeEnds':		False,			# bool			- whether to include end bridging reactions (if applicable)
 		'dehyb': 			True,			# bool			- whether to include dehybridization reactions
 		'debug': 			False,			# bool			- whether to include debugging output
@@ -639,7 +644,8 @@ def writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_
 			"variable        varID atom id\n"
 		   f"group           scaf type == 1\n"
 		   f"group           real id <= {p.nbead}\n"
-			"group           mobile type 1 2\n\n")
+			"group           mobile type 1 2\n"
+		   f"thermo          {int(p.dump_every*10)}\n\n")
 
 		### relax everything
 		if p.nstep_relax > 0: f.write(
@@ -648,7 +654,7 @@ def writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_
 			"fix             tstat2 mobile nve/limit 0.1\n"
 		   f"timestep        {p.dt}\n"
 		   f"run             {int(p.nstep_relax)}\n"
-		   f"fix             tstat1 mobile langevin {p.T} {p.T} {1/p.gamma_t:0.4f} {p.rseed}\n"
+		   f"fix             tstat1 mobile langevin {p.T_relax} {p.T} {1/p.gamma_t:0.4f} {p.rseed}\n"
 		   f"run             {int(p.nstep_relax)}\n"
 			"unfix           tstat1\n"
 			"unfix           tstat2\n"
@@ -759,7 +765,7 @@ def writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_
 		### production
 		f.write(
 			"## Production\n"
-		   f"fix             tstat1 mobile langevin {p.T} {p.T+40} {1/p.gamma_t:0.4f} {p.rseed}\n"
+		   f"fix             tstat1 mobile langevin {p.T} {p.T} {1/p.gamma_t:0.4f} {p.rseed}\n"
 			"fix             tstat2 mobile nve\n"
 		   f"timestep        {p.dt}\n"
 		   f"dump            dump1 real custom {int(p.dump_every)} trajectory.dat id mol xs ys zs\n"
@@ -2723,7 +2729,7 @@ def buildDNAfoldModel(cadFile, p):
 	backbone_neighbors = [[-1,-1] for i in range(p.n_ori)]
 	complements = [-1 for i in range(p.n_ori)]
 	vstrands = [0 for i in range(p.n_ori)]
-	is_crossover = [False for i in range(p.n_ori)]
+	is_crossover = [False for i in range(p.n_scaf)]
 
 	### initialize nucleotide and bead indices
 	ni_current = 0
@@ -2845,19 +2851,21 @@ def buildDNAfoldModel(cadFile, p):
 			sys.exit()
 
 	### identify crossovers
-	for bi in range(1, p.n_ori):
+	for bi in range(1, p.n_scaf):
 		if vstrands[bi] != vstrands[bi-1]:
 			if strands[bi] == strands[bi-1]:
 				is_crossover[bi] = True
 				is_crossover[bi-1] = True
 
+	### end crossover
+	if vstrands[0] != vstrands[p.n_scaf-1]:
+		is_crossover[0] = True
+		is_crossover[p.n_scaf-1] = True
+
 	### adjustments for circular scaffold
 	if p.circularScaf:
 		backbone_neighbors[0][0] = p.n_scaf-1
 		backbone_neighbors[p.n_scaf-1][1] = 0
-		if vstrands[0] != vstrands[p.n_scaf]:
-			is_crossover[0] = True
-			is_crossover[p.n_scaf] = True
 
 	### strand count
 	p.nstrand = max(strands)+1
@@ -2951,23 +2959,25 @@ def find(strand, index, list):
 ### adjust for scaffold cut location
 def shiftScaffold(complements, is_crossover, p):
 
+	### initialize
+	complements_shifted = copy.deepcopy(complements)
+	is_crossover_shifted = copy.deepcopy(is_crossover)
+
 	### only for linear scaffolds with nonzero shift
 	if not p.circularScaf and p.scaf_shift != 0:
 
 		### adjust complements
-		complements_original = copy.deepcopy(complements)
 		for i in range(p.n_scaf):
-			complements[i] = complements_original[ np.mod(i+p.scaf_shift, p.n_scaf) ]
+			complements_shifted[i] = complements[ np.mod(i+p.scaf_shift, p.n_scaf) ]
 		for i in range(p.n_scaf,p.n_ori):
-			complements[i] = np.mod(complements_original[i]-p.scaf_shift, p.n_scaf)
+			complements_shifted[i] = np.mod(complements[i]-p.scaf_shift, p.n_scaf)
 
 		### adjust crossover
-		is_crossover_original = copy.deepcopy(is_crossover)
 		for i in range(p.n_scaf):
-			is_crossover[i] = is_crossover_original[ np.mod(i+p.scaf_shift, p.n_scaf) ]
+			is_crossover_shifted[i] = is_crossover[ np.mod(i+p.scaf_shift, p.n_scaf) ]
 
 	### result
-	return complements, is_crossover
+	return complements_shifted, is_crossover_shifted
 
 
 ### run the script
