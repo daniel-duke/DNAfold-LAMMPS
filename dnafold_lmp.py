@@ -26,14 +26,9 @@ import os
   # including misbinding with either energy function or position optimization.
 # required arguments from input file: cadFile, nstep, dbox
 
-# Immediate To Do
-# enumerate all templates for misbinding
-# sequence dependent hybridization
-
-# Eventual To Do
-# find optimal tradeoff between commuication cutoff and bond break, parameterize
-  # 90 degree angular potential, reactions that shortens crossover bond length,
-  # figure out bridging reactions
+## To Do
+# add cpu thermo output
+# distinguish comm cutoff from force cutoff
 
 
 ################################################################################
@@ -53,7 +48,7 @@ def main():
 		simType = "experiment"		# prepended to desID to get name of output folder within standard location
 		rstapTag = None				# tag for reserved staples file (None for not reserving staples)
 		confTag = None				# if starting bound, tag for oxDNA configuration file (None for caDNAno positions)
-		rseed = 6					# random seed, used for initializing positions and LAMMPS thermostat, also used for naming simulation folders
+		rseed = 1					# random seed, used for initializing positions and LAMMPS thermostat, also used for naming simulation folders
 		nsim = 1					# number of simulations, starting with given random seed and incrementing by 1 for each simulation
 
 		### choose parameters
@@ -225,8 +220,8 @@ def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, oxFiles=None, 
 		'T':				300,			# K				- temperature
 		'T_relax':			600,			# K				- temperature for relaxation (set to 300 if starting bound)
 		'r_h_bead':			1.28,			# nm			- hydrodynamic radius of single bead
-		'visc':				0.8472,			# mPa/s			- viscosity (units equivalent to pN*ns/mn^2)
-		'sigma':			2.14,			# nm			- bead Van der Waals radius
+		'visc':				0.8472,			# mPa/s			- viscosity (units equivalent to pN*ns/nm^2) (default value for 300K)
+		'sigma':			2.14,			# nm			- WCA distance parameter
 		'epsilon':			4.0,			# kcal/mol		- WCA energy parameter
 		'r12_eq':			2.72,			# nm			- equilibrium bead separation
 		'k_x': 				120.0,			# kcal/mol/nm2	- backbone spring constant (standard definition)
@@ -283,7 +278,7 @@ def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, oxFiles=None, 
 
 	### read parameters from file
 	if inFile is not None:
-		ars.testFileExist(inFile,'input')
+		ars.checkFileExist(inFile,'input')
 		with open(inFile, 'r') as f:
 			for line in f:
 				line = line.strip()
@@ -314,12 +309,12 @@ def readInput(inFile=None, rseed=1, cadFile=None, rstapFile=None, oxFiles=None, 
 	### get caDNAno file
 	cadFile = params['cadFile']
 	del params['cadFile']
-	ars.testFileExist(cadFile,"caDNAno")
+	ars.checkFileExist(cadFile,"caDNAno")
 
 	### get reserved staples file
 	rstapFile = params['rstapFile']
 	del params['rstapFile']
-	ars.testFileExist(cadFile,"reserved staples")
+	ars.checkFileExist(cadFile,"reserved staples")
 	params['reserveStap'] = False if rstapFile is None else True
 
 	### get topology file
@@ -367,7 +362,7 @@ def readRstap(rstapFile, p):
 		return is_reserved_strand
 
 	### read staples
-	ars.testFileExist(rstapFile,"reserved staples")
+	ars.checkFileExist(rstapFile,"reserved staples")
 	with open(rstapFile, 'r') as f:
 		reserved_strands = [ int(line.strip())-1 for line in f ]
 	for si in range(len(reserved_strands)):
@@ -551,13 +546,19 @@ def writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_
 	react_every_bridge		= 1E2	# steps			- how often to check for bridge creation or destruction
 	r12_cut_react_hybBond	= 3		# nm			- cutoff radius for potential hybridization bonds
 	r12_cut_react_bridge	= 3		# nm			- cutoff radius for bridging reactions
-	comm_cutoff				= 12	# nm			- communication cutoff (relevant for parallelization)
+	comm_cut				= 12	# nm			- communication cutoff (relevant for parallelization)
 	U_barrier_comm			= 10	# kcal/mol		- energy barrier to exceeding communication cutoff
 	F_forceBind				= 1		# kcal/mol/nm	- force to apply for forced binding
 
-	### adjust comm_cutoff 	for forced binding
+	### check neighbor list cutoff
+	if p.r12_cut_WCA + verlet_skin < r12_cut_react_hybBond:
+		print("Flag: Hybridization reaction cutoff exceeds neighbor list cutoff.")
+	if p.r12_cut_WCA + verlet_skin < r12_cut_react_bridge:
+		print("Flag: Bridging cutoff exceeds neighbor list cutoff.")
+
+	### adjust comm_cut for forced binding
 	if p.forceBind:
-		comm_cutoff = int(np.sqrt(3)*p.dbox+1)
+		comm_cut = int(np.sqrt(3)*p.dbox+1)
 
 	### number of bond dybridization reactions
 	nreact_bondDehyb = nreact_bondHyb
@@ -565,12 +566,12 @@ def writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_
 		nreact_bondDehyb = 0
 
 	### write table for full hybridization bond
-	npoint_hybBond = writeHybBond(outSimFold, "hybFull", p.U_hyb, F_forceBind, comm_cutoff, U_barrier_comm, bond_res, p)
+	npoint_hybBond = writeHybBond(outSimFold, "hybFull", p.U_hyb, F_forceBind, comm_cut, U_barrier_comm, bond_res, p)
 
 	### write table for partial hybridization bonds
 	for i in range(p.nmisBond):
 		U_hyb = p.U_mis_max - (i+0.5)*(p.U_mis_max-p.U_mis_min)/p.nmisBond - p.U_mis_shift
-		writeHybBond(outSimFold, f"hybPart{i+1}", U_hyb, F_forceBind, comm_cutoff, U_barrier_comm, bond_res, p)
+		writeHybBond(outSimFold, f"hybPart{i+1}", U_hyb, F_forceBind, comm_cut, U_barrier_comm, bond_res, p)
 
 	### count digits
 	len_nrbM = len(str(nreact_bondMis))
@@ -609,12 +610,12 @@ def writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_
 			"## Parameters\n"
 		   f"neighbor        {verlet_skin:0.2f} bin\n"
 		   f"neigh_modify    every {int(neigh_every)}\n"
-		   f"pair_style      hybrid zero {p.r12_cut_WCA:0.2f} lj/cut {p.r12_cut_WCA:0.2f}\n"
+		   f"pair_style      hybrid zero 0.0 lj/cut {p.r12_cut_WCA:0.2f}\n"
 			"pair_modify     pair lj/cut shift yes\n"
 		   f"pair_coeff      * * lj/cut {p.epsilon:0.2f} {p.sigma:0.2f} {p.r12_cut_WCA:0.2f}\n"
 		   f"pair_coeff      * 3 zero\n"
 			"special_bonds   lj 0.0 1.0 1.0\n"
-		   f"comm_modify     cutoff {comm_cutoff}\n")
+		   f"comm_modify     cutoff {comm_cut}\n")
 
 		### basic bonded interactions
 		f.write(
@@ -626,7 +627,7 @@ def writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_
 		for i in range(p.nmisBond): f.write(
 		   f"bond_coeff      {i+3} table bond_hybPart{i+1}.txt hybPart{i+1}\n")
 
-		### dummy bond
+		### dummy bond (for reserved staples)
 		f.write(
 		   f"bond_coeff      {p.nmisBond+3} zero\n")
 
@@ -707,7 +708,7 @@ def writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_
 		
 		### bond dehybridization reactions
 		for ri in range(nreact_bondDehyb): f.write(
-		   f" &\n                react bondDehyb{ri+1} all {int(react_every_bondDehyb)} {r12_cut_react_hybBond:.1f} {comm_cutoff} hybBond{ri+1}_mol_bondYa hybBond{ri+1}_mol_bondNo react/bondDehyb{ri+1}_map.txt custom_charges 2")
+		   f" &\n                react bondDehyb{ri+1} all {int(react_every_bondDehyb)} {r12_cut_react_hybBond:.1f} {comm_cut} hybBond{ri+1}_mol_bondYa hybBond{ri+1}_mol_bondNo react/bondDehyb{ri+1}_map.txt custom_charges 2")
 		
 		### misbinding reactions
 		for ri in range(nreact_bondMis): f.write(
@@ -719,7 +720,7 @@ def writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_
 
 		### angle deactivation reactions
 		for ri in range(nreact_angleDeact): f.write(
-		   f" &\n                react angleDeact{ri+1} all {int(react_every_angleDeact)} {p.r12_cut_hyb:.1f} {comm_cutoff} angleDeact{ri+1}_mol angleDeact{ri+1}_mol react/angleDeact{ri+1}_map.txt custom_charges 1")
+		   f" &\n                react angleDeact{ri+1} all {int(react_every_angleDeact)} {p.r12_cut_hyb:.1f} {comm_cut} angleDeact{ri+1}_mol angleDeact{ri+1}_mol react/angleDeact{ri+1}_map.txt custom_charges 1")
 
 		### bridge making reaction
 		for ri in range(nreact_bridge): f.write(
@@ -727,7 +728,7 @@ def writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_
 
 		### bridge breaking reactions
 		for ri in range(nreact_unbridge): f.write(
-		   f" &\n                react unbridge{ri+1} all {int(react_every_bondDehyb)} {p.r12_cut_hyb:.1f} {comm_cutoff} unbridge{ri+1}_mol_bondYa unbridge{ri+1}_mol_bondNo react/unbridge{ri+1}_map.txt custom_charges 1")
+		   f" &\n                react unbridge{ri+1} all {int(react_every_bondDehyb)} {p.r12_cut_hyb:.1f} {comm_cut} unbridge{ri+1}_mol_bondYa unbridge{ri+1}_mol_bondNo react/unbridge{ri+1}_map.txt custom_charges 1")
 		f.write("\n\n")
 
 		#-------- end reactions --------#
@@ -751,16 +752,16 @@ def writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_
 		if p.debug:
 			f.write(
 			"## Debugging\n"
-			"compute         compD1a all bond/local dist engpot\n"
-			"compute         compD1b all property/local btype batom1 batom2\n"
-		   f"dump            dumpD1 all local {int(p.dump_every)} dump_bonds.dat index c_compD1a[1] c_compD1a[2] c_compD1b[1] c_compD1b[2] c_compD1b[3] \n"
-			"dump_modify     dumpD1 append yes\n"
-			"compute         compD2a all angle/local theta eng\n"
-			"compute         compD2b all property/local atype aatom1 aatom2 aatom3\n"
-		   f"dump            dumpD2 all local {int(p.dump_every)} dump_angles.dat index c_compD2a[1] c_compD2a[2] c_compD2b[1] c_compD2b[2] c_compD2b[3] c_compD2b[4]\n"
-			"dump_modify     dumpD2 append yes\n"
-		   f"dump            dumpD3 all custom {int(p.dump_every)} dump_charges.dat id q\n"
-			"dump_modify     dumpD3 sort id append yes\n\n")
+			"compute         compDB1 all bond/local dist engpot\n"
+			"compute         compDB2 all property/local btype batom1 batom2\n"
+		   f"dump            dumpDB all local {int(p.dump_every)} dump_bonds.dat index c_compDB1[1] c_compDB1[2] c_compDB2[1] c_compDB2[2] c_compDB2[3] \n"
+			"dump_modify     dumpDB append yes\n"
+			"compute         compDA1 all angle/local theta eng\n"
+			"compute         compDA2 all property/local atype aatom1 aatom2 aatom3\n"
+		   f"dump            dumpDA all local {int(p.dump_every)} dump_angles.dat index c_compDA1[1] c_compDA1[2] c_compDA2[1] c_compDA2[2] c_compDA2[3] c_compDA2[4]\n"
+			"dump_modify     dumpDA append yes\n"
+		   f"dump            dumpDC all custom {int(p.dump_every)} dump_charges.dat id q\n"
+			"dump_modify     dumpDC sort id append yes\n\n")
 
 		### production
 		f.write(
@@ -768,8 +769,8 @@ def writeInput(outSimFold, nhyb, nangle, nreact_bondHyb, nreact_bondMis, nreact_
 		   f"fix             tstat1 mobile langevin {p.T} {p.T} {1/p.gamma_t:0.4f} {p.rseed}\n"
 			"fix             tstat2 mobile nve\n"
 		   f"timestep        {p.dt}\n"
-		   f"dump            dump1 real custom {int(p.dump_every)} trajectory.dat id mol xs ys zs\n"
-			"dump_modify     dump1 sort id append yes\n"
+		   f"dump            dumpT real custom {int(p.dump_every)} trajectory.dat id mol xs ys zs\n"
+			"dump_modify     dumpT sort id append yes\n"
 		   f"restart         {int(p.dump_every/2)} restart_binary1.out restart_binary2.out\n\n")
 
 		### run the simulation
@@ -793,7 +794,7 @@ def writeReactHybBond(outReactFold, mis_d2_cuts, p):
 	# one template always used, second template for linear scaffolds
 
 	### fragment description
-	# 1 - central scaffold, used to: (for hyb) ensure complimentarity, (for dehyb) ensure angle deactivation
+	# 1 - central scaffold, used to: (for hyb) ensure full or parital complimentarity, (for dehyb) ensure angle deactivation
 	# 2 - central staple, used to: (for hyb) ensure full or partial complimentarity, (for hyb) ensure unbound hyb status, set hyb status with custom charges
 	# 3 - flanking staple 1, used to: (for dehyb) ensure angle deactivation
 	# 4 - flanking staple 2 (if present), used to: (for dehyb) ensure angle deactivation
@@ -955,7 +956,7 @@ def writeReactMisBond(outReactFold, mis_d2_cuts, p):
 	bonds_all.append(bonds)
 	edges_all.append(edges)
 
-	### two flanking staple beads
+	### one flanking staple bead
 	atoms = [ [1,1,0], [0,-1,1], [1,-1,2] ]
 	bonds = [ [1,0,1], [0,2,0] ]
 	edges = [ 1, 2 ]
@@ -1062,7 +1063,7 @@ def writeReactAngleAct(outReactFold, backbone_neighbors, complements, is_crossov
 	# 1 - left core scaffold, used to: ensure angle type and status
 	# 2 - central scaffold, used to: ensure angle type and status
 	# 3 - right core scaffold, used to: ensure angle type and status
-	# 4 - core scaffolds and staples, used to: set angle status with custom charges
+	# 4 - core scaffolds and staples, used to: set angle status and hyb status with custom charges
 
 	### initialize templates
 	atoms_all = []
@@ -1332,10 +1333,6 @@ def writeReactAngleAct(outReactFold, backbone_neighbors, complements, is_crossov
 				atoms_all,bonds_all,angls_all,edges_all = unzip4(templates)
 
 	#-------- end template loop --------#
-
-	# pklFile = "angleTemplates_triSS_edit.pkl"
-	# with open(pklFile, 'wb') as f:
-	# 	pickle.dump([atoms_all,bonds_all,angls_all,edges_all], f)
 
 	### for nice debug output
 	if debug_angle: print()
@@ -1905,9 +1902,9 @@ def writeMolecule(molFile, atoms, bonds=None, angls=None, frags=None, includeCha
 
 
 ### write table for hybridization bond
-def writeHybBond(outSimFold, bondName, U_hyb, F_forceBind, comm_cutoff, U_barrier_comm, bond_res, p):
+def writeHybBond(outSimFold, bondName, U_hyb, F_forceBind, comm_cut, U_barrier_comm, bond_res, p):
 	bondFile = outSimFold + "bond_" + bondName + ".txt"
-	npoint = int(comm_cutoff/bond_res+1)
+	npoint = int(comm_cut/bond_res+1)
 
 	### write file
 	with open(bondFile, 'w') as f:
@@ -1924,9 +1921,9 @@ def writeHybBond(outSimFold, bondName, U_hyb, F_forceBind, comm_cutoff, U_barrie
 			elif p.forceBind:
 				U = 6.96*F_forceBind*(r12-p.r12_cut_hyb)
 				F = -6.96*F_forceBind
-			elif r12 > comm_cutoff - 2:
-				U = 6.96*U_barrier_comm*((r12-(comm_cutoff-2))/2)**2
-				F = -6.96*U_barrier_comm*(r12-(comm_cutoff-2))
+			elif r12 > comm_cut - 2:
+				U = 6.96*U_barrier_comm*((r12-(comm_cut-2))/2)**2
+				F = -6.96*U_barrier_comm*(r12-(comm_cut-2))
 			else:
 				U = 0
 				F = 0
@@ -2030,7 +2027,7 @@ def initPositions(strands, p):
 
 			### position linked to previous bead
 			if strands[obi] == strands[obi-1]:
-				r_propose = ars.applyPBC(r[rbi-1] + p.r12_eq*ars.unitVector(ars.boxMuller(p.rng)), p.dbox)
+				r_propose = ars.applyPBC(r[rbi-1] + p.r12_eq*ars.randUnitVec(p.rng), p.dbox)
 
 			### random position for new strand
 			else:
@@ -2108,7 +2105,7 @@ def randomStapPositions(r, strands, is_reserved_strand, p):
 
 				### position linked to previous bead
 				if strands[obi] == strands[obi-1]:
-					r_propose = ars.applyPBC(r[rbi-1] + p.r12_eq*ars.unitVector(ars.boxMuller(p.rng)), p.dbox)
+					r_propose = ars.applyPBC(r[rbi-1] + p.r12_eq*ars.randUnitVec(p.rng), p.dbox)
 
 				### random position for new strand
 				else:
@@ -2879,7 +2876,7 @@ def parseCaDNAno(cadFile):
 	print("Parsing caDNAno file...")
 	
 	### load caDNAno file
-	ars.testFileExist(cadFile,"caDNAno")
+	ars.checkFileExist(cadFile,"caDNAno")
 	with open(cadFile, 'r') as f:
 		json_string = f.read()
 	j = json.loads(json_string)

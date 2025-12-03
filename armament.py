@@ -25,7 +25,7 @@ def readAtomDump(datFile, nstep_skip=0, coarse_time=1, bdis='all', coarse_points
 
 	### load trajectory file
 	print("Loading LAMMPS-style trajectory...")
-	ars.testFileExist(datFile, "trajectory")
+	ars.checkFileExist(datFile, "trajectory")
 	with open(datFile, 'r') as f:
 		content = f.readlines()
 	print("Parsing trajectory...")
@@ -114,7 +114,7 @@ def readAtomDump(datFile, nstep_skip=0, coarse_time=1, bdis='all', coarse_points
 def getNstep(datFile, nstep_skip=0, coarse_time=1):
 
 	### load trajectory file
-	ars.testFileExist(datFile, "trajectory")
+	ars.checkFileExist(datFile, "trajectory")
 	with open(datFile, 'r') as f:
 		content = f.readlines()
 
@@ -139,7 +139,7 @@ def readGeo(geoFile, **kwargs):
 	  # the bonds all start from 1.
 
 	### load geometry file
-	ars.testFileExist(geoFile, "geometry")
+	ars.checkFileExist(geoFile, "geometry")
 	with open(geoFile, 'r') as f:
 		content = f.readlines()
 
@@ -280,7 +280,7 @@ def readGeo(geoFile, **kwargs):
 
 ### read cluster file
 def readCluster(clusterFile):
-	ars.testFileExist(clusterFile, "cluster")
+	ars.checkFileExist(clusterFile, "cluster")
 	with open(clusterFile, 'r') as f:
 		content = f.readlines()
 	content = ars.cleanFileContent(content)
@@ -503,7 +503,7 @@ def writeGeo(geoFile, dbox3, r, molecules='auto', types='auto', bonds=None, angl
 def unpickle(pklFile, dims=None, hushExtraFlag=False):
 
 	### read file
-	ars.testFileExist(pklFile, "pickle")
+	ars.checkFileExist(pklFile, "pickle")
 	with open(pklFile, 'rb') as f:
 		cucumber = pickle.load(f)
 
@@ -599,6 +599,7 @@ def plotHist(A, Alabel=None, title=None, figLabel="Hist", nbin='auto', Alim_bin=
 	weights			= None		if 'weights' not in kwargs else kwargs['weights']
 	plotAsLine		= False		if 'plotAsLine' not in kwargs else kwargs['plotAsLine']
 	plotAvgLine		= False		if 'plotAvgLine' not in kwargs else kwargs['plotAvgLine']
+	avgLabel		= None	if 'avgLabel' not in kwargs else kwargs['avgLabel']
 	alpha			= 0.6		if 'alpha' not in kwargs else kwargs['alpha']
 
 	### notes
@@ -621,6 +622,10 @@ def plotHist(A, Alabel=None, title=None, figLabel="Hist", nbin='auto', Alim_bin=
 	elif not ars.isarray(Alim_plot) or len(Alim_plot) != 2:
 		print("Flag: Skipping histogram plot - variable limits must be either 'auto' or 2-element array.")
 		return
+	if avgLabel is not None:
+		avgLabel = "$\\mu_{\\textrm{" + f"{avgLabel}" + "}}$"
+	else:
+		avgLabel = f"$\\mu$"
 
 	### plot histogram
 	plt.figure(figLabel)
@@ -631,7 +636,7 @@ def plotHist(A, Alabel=None, title=None, figLabel="Hist", nbin='auto', Alim_bin=
 		edges = edges[:len(edges)-1] + 1/2*(edges[1]-edges[0])
 		plt.plot(edges, heights, color='black')
 	if plotAvgLine:
-		plt.axvline(np.mean(A), color='red', linestyle='--', label=f"Avg = {np.mean(A):0.2f}")
+		plt.axvline(np.mean(A), color='red', linestyle='--', label=f"{avgLabel} = {np.mean(A):0.2f}")
 	plt.xlim(Alim_plot)
 	if Alabel is not None:
 		plt.xlabel(Alabel)
@@ -832,7 +837,7 @@ def movingAvg(A, stride=1):
 	return np.pad(avg, (pad_left,pad_right), mode='edge')
 
 
-### unit vector
+### divide vector my magnitude
 def unitVector(vector):
 	return vector / np.linalg.norm(vector)
 
@@ -848,9 +853,9 @@ def applyPBC(r, dbox):
 	return r - dbox*np.round(r/dbox)
 
 
-### vector with random orientation and (on average) unit magnitude
-def boxMuller(rng=np.random):
-	return np.sqrt(-2 * np.log(rng.uniform(size=3))) * np.cos(2 * np.pi * rng.uniform(size=3))
+### get random unit vector with given number of dimensions
+def randUnitVec(rng=np.random, ndim=3):
+	return ars.unitVector(rng.normal(size=ndim))
 
 
 ### vector randomly placed within box
@@ -907,7 +912,7 @@ def checkAllDummy(r):
 
 
 ### test if files exist
-def testFileExist(file, name="the", required=True):
+def checkFileExist(file, name="the", required=True):
 	if os.path.isfile(file):
 		return True
 	else:

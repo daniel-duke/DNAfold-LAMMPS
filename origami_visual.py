@@ -1,6 +1,5 @@
 import armament as ars
 import utils
-import utilsLocal
 from ovito import scene
 from ovito.io import import_file
 from ovito.vis import Viewport, SimulationCellVis
@@ -20,38 +19,6 @@ import sys
 ### Parameters
 
 def main():
-
-	### where to get files
-	useDanielFiles = False
-
-	### special code to make Daniel happy
-	if useDanielFiles:
-
-		### chose design
-		desID = "2HBx4"			# design identificaiton
-		confTag = None			# if using oxdna positions, tag for configuration file (None for caDNAno positions)
-		rstapTag = None			# if reserving staples, tag for reserved staples file (None for all staples)
-		circularScaf = True		# whether to add backbone bond between scaffold ends
-		scaf_shift = 0			# if linear scaffold, bead shift for cut location (3' end chasing 5' end)
-		hideStap = False		# whether to hide all staples from view, only showing scaffold
-		win_render = 'none'		# what window to render as png (none, front, side_ortho, side_perspec, corner)
-
-		### get input files
-		cadFile = utilsLocal.getCadFile(desID)
-		rstapFile = utilsLocal.getRstapFile(desID, rstapTag) if rstapTag is not None else None
-
-		### determine position source
-		if confTag is not None:
-			position_src = 'oxdna'
-			topFile, confFile = utilsLocal.getOxFiles(desID, confTag)
-		else:
-			position_src = 'cadnano'
-
-		### set output folder
-		outFold = utilsLocal.getSimHomeFold(desID)
-
-	### regular code for the general populace
-	if not useDanielFiles:
 
 		### get arguments
 		parser = argparse.ArgumentParser()
@@ -174,7 +141,7 @@ def writeOvito(ovitoFile, outGeoFile, figFile, hideStap, win_render):
 def readRstap(rstapFile):
 
 	### read reserved staples file
-	ars.testFileExist(rstapFile, "reserved staples")
+	ars.checkFileExist(rstapFile, "reserved staples")
 	with open(rstapFile, 'r') as f:
 		reserved_strands = [ int(line.strip()) for line in f ]
 

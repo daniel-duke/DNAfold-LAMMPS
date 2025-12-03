@@ -16,11 +16,6 @@ import os
 # this script will only work if "backend_basics.py" has already been run for
   # the given simulation (requires a populated "analysis" folder).
 
-## To Do
-# write a separate script that analyzes a single "started from caDNAno" simulation, 
-  # gets the mean structure, then saves the positions to a pickle file, then add
-  # the option in this script to read that file and use it as the RMSD reference.
-
 
 ################################################################################
 ### Parameters
@@ -222,8 +217,8 @@ def main():
 def plotCrystallinity(S_allSim, used_every):
 	nsim = S_allSim.shape[0]
 	nstep = S_allSim.shape[1]
-	plotMedian = False
-	plotSEM = False
+	plotMedian = True
+	plotSEM = True
 
 	### calculations
 	S_avg = np.median(S_allSim, axis=0)
@@ -328,7 +323,7 @@ def plotRMSDvS(RMSD_allSim, S_allSim):
 
 ### get connectivity variables
 def readConn(connFile):
-	ars.testFileExist(connFile, "connectivity")
+	ars.checkFileExist(connFile, "connectivity")
 	with open(connFile, 'rb') as f:
 		params = pickle.load(f)
 	n_scaf = params['n_scaf']

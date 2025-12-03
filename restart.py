@@ -89,22 +89,26 @@ def main():
 def editInput(lammpsFile, nstep, astapFile):
 
 	### read old lammps file
-	ars.testFileExist(lammpsFile)
+	ars.checkFileExist(lammpsFile)
 	with open(lammpsFile,'r') as f:
 		content_in = f.readlines()
 
-	### parse the content and write edited content
+	### initialize
 	content_out = []
 	nbondType = 0
 	i = 0
+
+	### loop over input content lines
 	while i < len(content_in):
+
+		### add line to edited content by default
 		content_out.append(content_in[i])
 
 		### set how to read geometry
 		if content_in[i].startswith("## Geometry"):
 
 			### get fix CFs line
-			if "read_restart" in content_in[i+1]:
+			if content_in[i+1].startswith("read_restart"):
 				line_fixCFs = content_in[i+2]
 			else:
 				line_fixCFs = content_in[i+1]
@@ -123,7 +127,7 @@ def editInput(lammpsFile, nstep, astapFile):
 				content_out.append(line_fixCFs)
 				
 			### skip the appropriate number of lines
-			if "read_restart" in content_in[i+1]:
+			if content_in[i+1].startswith("read_restart"):
 				i += 2
 			else:
 				i += 5
@@ -135,7 +139,7 @@ def editInput(lammpsFile, nstep, astapFile):
 
 		### run a single step before dumps
 		elif content_in[i].startswith("## Production"):
-			if "run" not in content_in[i+4]:
+			if not content_in[i+4].startswith("run"):
 				content_out.append(content_in[i+1])
 				content_out.append(content_in[i+2])
 				content_out.append(content_in[i+3])
@@ -168,7 +172,7 @@ def readAstap(astapFile, nstrand):
 	is_add_strand = [ False for i in range(nstrand) ]
 
 	### read add staples file
-	ars.testFileExist(astapFile, "add staples")
+	ars.checkFileExist(astapFile, "add staples")
 	with open(astapFile, 'r') as f:
 		content = f.readlines()
 	content = ars.cleanFileContent(content)
@@ -224,7 +228,7 @@ def addStap(r, strands, types, is_add_strand, r12_eq, sigma, dbox, rng):
 
 			### position linked to previous bead
 			if strands[bi] == strands[bi-1]:
-				r_propose = ars.applyPBC(r[bi-1] + r12_eq*ars.unitVector(ars.boxMuller(rng)), dbox)
+				r_propose = ars.applyPBC(r[bi-1] + r12_eq*ars.unitVector(ars.randUnitVec(rng)), dbox)
 
 			### random position for new strand
 			else:

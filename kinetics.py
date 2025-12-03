@@ -201,7 +201,7 @@ def plotNmis(hyb_status_allSim, n_scaf, used_every, misFile):
 
 ### get connectivity variables
 def readConn(connFile):
-	ars.testFileExist(connFile, "connectivity")
+	ars.checkFileExist(connFile, "connectivity")
 	with open(connFile, 'rb') as f:
 		params = pickle.load(f)
 	strands = params['strands']

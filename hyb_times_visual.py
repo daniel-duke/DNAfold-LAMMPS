@@ -228,7 +228,7 @@ def writeOvito(ovitoFile, outGeoFile, outDatFile):
 
 ### get connectivity variables
 def readConn(connFile):
-	ars.testFileExist(connFile, "connectivity")
+	ars.checkFileExist(connFile, "connectivity")
 	with open(connFile, 'rb') as f:
 		params = pickle.load(f)
 	strands = params['strands']

@@ -119,7 +119,7 @@ def main():
 
 	### initialize pipeline
 	geoFile = simFolds[0] + "analysis/geometry_vis.in"
-	ars.testFileExist(geoFile,"geometry")
+	ars.checkFileExist(geoFile,"geometry")
 	pipeline = import_file(geoFile, atom_style="molecular")
 	pipeline.add_to_scene()
 
@@ -264,7 +264,7 @@ def plotChords(strands, complements):
 
 ### get connectivity variables
 def readConn(connFile):
-	ars.testFileExist(connFile, "connectivity")
+	ars.checkFileExist(connFile, "connectivity")
 	with open(connFile, 'rb') as f:
 		params = pickle.load(f)
 	strands = params['strands']

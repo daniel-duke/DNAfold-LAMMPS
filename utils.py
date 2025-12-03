@@ -85,7 +85,7 @@ def getRseeds(copiesFile=None, rseed=None):
 
 ### read file containing simulation folder names and (optionally) random seeds
 def readCopies(copiesFile):
-	ars.testFileExist(copiesFile, "copies")
+	ars.checkFileExist(copiesFile, "copies")
 	with open(copiesFile, 'r') as f:
 		content = f.readlines()
 	content = ars.cleanFileContent(content)
@@ -102,7 +102,7 @@ def readCopies(copiesFile):
 
 ### read oxdna configuration
 def readConf(confFile, nba_total):
-	ars.testFileExist(confFile, "configuration")
+	ars.checkFileExist(confFile, "configuration")
 	with open(confFile) as f:
 		content = f.readlines()
 	dbox3 = [ float(i) for i in content[1].split()[2:] ]
@@ -119,7 +119,7 @@ def readConf(confFile, nba_total):
 
 ### read oxdna topology
 def readTop(topFile):
-	ars.testFileExist(topFile, "topology")
+	ars.checkFileExist(topFile, "topology")
 	with open(topFile) as f:
 		content = f.readlines()
 	nba_total = int(content[0].split()[0])
@@ -129,7 +129,7 @@ def readTop(topFile):
 
 ### read misbinding cutoffs and energies file
 def readMis(misFile):
-	ars.testFileExist(misFile, "misbinding")
+	ars.checkFileExist(misFile, "misbinding")
 	with open(misFile) as f:
 		content = f.readlines()
 	nmisBond = len(content)
@@ -156,7 +156,7 @@ def readHybStatus(hybFile, nstep_skip=0, coarse_time=1, nstep_max='all', **kwarg
 	
 	### load hyb status file
 	print("Loading hybridization status...")
-	ars.testFileExist(hybFile, "hybridization status")
+	ars.checkFileExist(hybFile, "hybridization status")
 	with open(hybFile, 'r') as f:
 		content = f.readlines()
 	print("Parsing hybridization status...")
@@ -220,7 +220,7 @@ def readHybStatus(hybFile, nstep_skip=0, coarse_time=1, nstep_max='all', **kwarg
 
 ### extract dump frequency from hyb status file
 def getDumpEveryHyb(hybFile):
-	ars.testFileExist(hybFile, "hybridization status")
+	ars.checkFileExist(hybFile, "hybridization status")
 	with open(hybFile, 'r') as f:
 		content = f.readlines()
 
@@ -675,7 +675,7 @@ def parseCaDNAno(cadFile):
 	print("Parsing caDNAno file...")
 	
 	### load caDNAno file
-	ars.testFileExist(cadFile,"caDNAno")
+	ars.checkFileExist(cadFile,"caDNAno")
 	with open(cadFile, 'r') as f:
 		json_string = f.read()
 	j = json.loads(json_string)
@@ -723,7 +723,7 @@ def parseCaDNAno(cadFile):
 					if scaffold_current[2] == -1 and scaffold_current[4] != -1:
 						fiveP_end_scaf = scaffold_current
 
-			### read staple side of helix
+			### read staple side of virtual strand
 			elif el2_key == "stap":
 				
 				### loop over nucleotides
