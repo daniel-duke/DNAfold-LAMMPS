@@ -2884,7 +2884,9 @@ def parseCaDNAno(cadFile):
 	### initialize
 	scaffold = []
 	staples = []
+	fiveP_end_scaf = []
 	fiveP_ends_stap = []
+
 	
 	### loop over virtual strands
 	for el1 in j["vstrands"]:
@@ -2894,7 +2896,7 @@ def parseCaDNAno(cadFile):
 			
 			### read virtual strand index
 			if el2_key == "num":
-				vstrand_current = el2
+				vi = el2
 			
 			### read scaffold side of virtual strand
 			elif el2_key == "scaf":
@@ -2903,14 +2905,14 @@ def parseCaDNAno(cadFile):
 				for ni_vstrand, neighbors in enumerate(el2):
 					
 					### store virtual strand index and nucleotide index for current nucleotide and its neighbors
-					scaffold_current = [vstrand_current, int(ni_vstrand)]
+					nt = [vi, int(ni_vstrand)]
 					for s in neighbors:
-						scaffold_current.append(int(s))
-					scaffold.append(scaffold_current)
+						nt.append(int(s))
+					scaffold.append(nt)
 					
 					### identify 5' end
-					if scaffold_current[2] == -1 and scaffold_current[4] != -1:
-						fiveP_end_scaf = scaffold_current
+					if nt[2] == -1 and nt[4] != -1:
+						fiveP_end_scaf = nt
 			
 			### read staple side of helix
 			elif el2_key == "stap":
@@ -2919,21 +2921,21 @@ def parseCaDNAno(cadFile):
 				for ni_vstrand, neighbors in enumerate(el2):
 					
 					### store virtual strand index and nucleotide index for current nucleotide and its neighbors
-					staple_current = [vstrand_current, int(ni_vstrand)]
+					nt = [vi, int(ni_vstrand)]
 					for s in neighbors:
-						staple_current.append(int(s))
-					staples.append(staple_current)
+						nt.append(int(s))
+					staples.append(nt)
 					
 					### identify 5' end
-					if staple_current[2] == -1 and staple_current[4] != -1:
-						fiveP_ends_stap.append(staple_current)
+					if nt[2] == -1 and nt[4] != -1:
+						fiveP_ends_stap.append(nt)
 			
 	### tally up the nucleotides
 	nnt_scaf = sum(1 for s in scaffold if s[2] != -1 or s[4] != -1)
 	nnt_stap = sum(1 for s in staples if s[2] != -1 or s[4] != -1)
 
 	### error message
-	if 'fiveP_end_scaf' not in locals():
+	if fiveP_end_scaf is None:
 		print("Error: Scaffold 5' end not found.\n")
 		sys.exit()
 	
