@@ -125,10 +125,6 @@ def parseCaDNAno(p):
 
 		### loop over the elements of the virtual strand
 		for el2_key, el2 in el1.items():
-
-			### read virtual strand index
-			if el2_key == "num":
-				vi = el2
 			
 			### read scaffold side of virtual strand
 			elif el2_key == "scaf":
@@ -1306,9 +1302,8 @@ def getDirHead(nt, dir_3p):
 	elif not isDirectConn(nt,-1,dir_3p):
 		return -1
 	else:
-		raise ValueError("BAH")
-		#print(f"Error: Cannot determine head direction for nucleotide with no feature @ vstrand {nt[0]}, nucleotide {nt[1]}\n")
-		#sys.exit()
+		print(f"Error: Cannot determine head direction for nucleotide with no feature @ vstrand {nt[0]}, nucleotide {nt[1]}\n")
+		sys.exit()
 
 
 ### get difference in positions between nucleotide and its connection on the given side

@@ -11,7 +11,7 @@ import os
 
 ### return standard simulation location
 def getSimHomeFold(desID, simTag="", simType="experiment"):
-	return "/Users/dduke/Files/dnafold_lmp/" + simType + "/" + desID + simTag + "/"
+	return "/Users/dduke/Data/dnafold_lmp/" + simType + "/" + desID + simTag + "/"
 
 
 ### find the caDNAno file in my file system

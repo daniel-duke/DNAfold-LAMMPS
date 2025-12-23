@@ -37,13 +37,13 @@ import os
 def main():
 
 	### where to get files
-	useDanielFiles = False
+	useDanielFiles = True
 
 	### special code to make Daniel happy
 	if useDanielFiles:
 
 		### chose design
-		desID = "2HBx4"				# design identification
+		desID = "2HBx1"				# design identification
 		simTag = ""					# appended to desID to get name of output folder
 		simType = "experiment"		# prepended to desID to get name of output folder within standard location
 		rstapTag = None				# tag for reserved staples file (None for not reserving staples)
@@ -2884,22 +2884,20 @@ def parseCaDNAno(cadFile):
 	### initialize
 	scaffold = []
 	staples = []
-	fiveP_end_scaf = []
+	fiveP_end_scaf = None
 	fiveP_ends_stap = []
 
-	
 	### loop over virtual strands
 	for el1 in j["vstrands"]:
+
+		### get virtual strand index
+		vi = el1["num"]
 		
 		### loop over the elements of the virtual strand
 		for el2_key, el2 in el1.items():
 			
-			### read virtual strand index
-			if el2_key == "num":
-				vi = el2
-			
 			### read scaffold side of virtual strand
-			elif el2_key == "scaf":
+			if el2_key == "scaf":
 				
 				### loop over nucleotides
 				for ni_vstrand, neighbors in enumerate(el2):
@@ -2912,7 +2910,11 @@ def parseCaDNAno(cadFile):
 					
 					### identify 5' end
 					if nt[2] == -1 and nt[4] != -1:
-						fiveP_end_scaf = nt
+						if fiveP_end_scaf is None:
+							fiveP_end_scaf = nt
+						else:
+							print("Error: Multiple scaffolds detected.\n")
+							sys.exit()
 			
 			### read staple side of helix
 			elif el2_key == "stap":

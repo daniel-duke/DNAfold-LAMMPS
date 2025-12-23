@@ -683,28 +683,28 @@ def parseCaDNAno(cadFile):
 	### initialize
 	scaffold = []
 	staples = []
+	fileF_end_scaf = None
 	fiveP_ends_stap = []
 	vstrand_rows = {}
 	vstrand_cols = {}
 	
 	### loop over virtual strands
 	for el1 in j["vstrands"]:
+
+		### get virtual strand index
+		vi = el1["num"]
+		vstrand_rows[vi] = vstrand_row_current
+		vstrand_cols[vi] = vstrand_col_current
 		
 		### loop over the elements of the virtual strand
 		for el2_key, el2 in el1.items():
-			
-			### read virtual strand index
-			if el2_key == "num":
-				vi = el2
-				vstrand_rows[vi] = vstrand_row_current
-				vstrand_cols[vi] = vstrand_col_current
 
 			### read virtual strand row index
 			if el2_key == "row":
 				vstrand_row_current = el2
 
 			### read virtual strand col index
-			if el2_key == "col":
+			elif el2_key == "col":
 				vstrand_col_current = el2
 			
 			### read scaffold side of virtual strand
@@ -721,7 +721,11 @@ def parseCaDNAno(cadFile):
 					
 					### identify 5' end
 					if nt[2] == -1 and nt[4] != -1:
-						fiveP_end_scaf = nt
+						if fiveP_end_scaf is None:
+							fiveP_end_scaf = nt
+						else:
+							print("Error: Multiple scaffolds detected.\n")
+							sys.exit()
 
 			### read staple side of virtual strand
 			elif el2_key == "stap":
@@ -744,7 +748,7 @@ def parseCaDNAno(cadFile):
 	nnt_stap = sum(1 for s in staples if s[2] != -1 or s[4] != -1)
 
 	### error message
-	if 'fiveP_end_scaf' not in locals():
+	if fiveP_end_scaf is None:
 		print("Error: Scaffold 5' end not found.\n")
 		sys.exit()
 
