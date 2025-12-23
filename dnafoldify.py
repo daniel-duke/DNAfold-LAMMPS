@@ -7,12 +7,11 @@ import json
 import copy
 
 ## Description
-# this script reads a caDNAno file, makes the structure DNAfold compatible
-  # (if possible), and writes a new caDNAno file.
+# this script reads a caDNAno file, makes the structure DNAfold compatible, 
+  # and writes a new caDNAno file.
 
 ## To Do
 # make sure no more than 2 features / 8 nucleotides
-# accomodate ssDNA crossovers that do not switch 3p direction
 # broaden scope of shifting logic to include potentially conflicting features:
   # search until next feature
   # if feature is terminal, include that feature in shift and return
@@ -634,7 +633,7 @@ def isBridgeEndShiftable(ntCs, ni, dir_head, dir_3p):
 		### complementary strand ends with bridge: incompatible
 		if isBridge(ntCs[ni], dir_head, -dir_3p):
 			print(f"Error: Mismatched bridge ends @ vstrand {ntCs[ni][0]}, nucleotide {ntCs[ni][1]}\n")
-			sys.exit()			
+			sys.exit()
 
 
 ### attempt to unite bridge by extending the given end
@@ -658,7 +657,7 @@ def shiftBridge(nts, ntCs, ni_ext, dir_3p, p):
 
 		### check if contracting end has complement
 		if isNucleotide(ntCs[ni_con]):
-			break
+			return cost, nts, ntCs
 
 		### check if extending end has room to extend
 		if isNucleotide(nts[ni_ext+dir_shift]) or isNucleotide(ntCs[ni_ext+dir_shift]) or not isRoomVstrand(ni_ext, dir_shift, nts):
@@ -710,7 +709,7 @@ def shiftBridge(nts, ntCs, ni_ext, dir_3p, p):
 				print(f"Warning: Breaking single-nucleotide complementary connection to accomodate bridge @ vstrand {nts[ni_con][0]}, nucleotide {nts[ni_con][1]}\n")
 
 			### finished
-			break
+			return -math.inf, nts, ntCs
 
 		### check if contracted nucleotide has head-direction crossover
 		elif isCrossover(nts[ni_con], dir_shift, dir_3p):
@@ -724,16 +723,24 @@ def shiftBridge(nts, ntCs, ni_ext, dir_3p, p):
 			nts[ni_ext+dir_shift][col_antiShift+1] = nts[ni_ext][1]
 			nts[ni_ext+dir_shift][col_withShift+0] = nts[ni_conn][0]
 			nts[ni_ext+dir_shift][col_withShift+1] = nts[ni_conn][1]
-			nts[ni_conn][col_withShift+0] = nts[ni_ext+dir_shift][0]
-			nts[ni_conn][col_withShift+1] = nts[ni_ext+dir_shift][1]
 			nts[ni_con][col_antiShift+0] = -1
 			nts[ni_con][col_antiShift+1] = -1
 			nts[ni_con][col_withShift+0] = -1
 			nts[ni_con][col_withShift+1] = -1
 
+			### update crossover nucleotide
+			dir_3p_conn = getDir3pRef(nts[ni_conn][0], nts[ni_ext], dir_3p)
+			dir_head_conn = getDirHead(nts[ni_conn], dir_3p_conn)
+			col_head_conn = getCol(dir_head_conn, dir_3p_conn)
+			nts[ni_conn][col_head_conn+0] = nts[ni_ext+dir_shift][0]
+			nts[ni_conn][col_head_conn+1] = nts[ni_ext+dir_shift][1]
+
 			### check for dangling complement
 			if isNucleotide(ntCs[ni_con]):
 				print(f"Warning: Breaking single-nucleotide complementary connection to accomodate bridge @ vstrand {nts[ni_con][0]}, nucleotide {nts[ni_con][1]}\n")
+
+			### finished
+			return -math.inf, nts, ntCs
 
 		### check if contracted nucleotide has head-direction bridge
 		elif isBridge(nts[ni_con], dir_shift, dir_3p):
@@ -754,7 +761,7 @@ def shiftBridge(nts, ntCs, ni_ext, dir_3p, p):
 			nts[ni_con][col_withShift+0] = -1
 			nts[ni_con][col_withShift+1] = -1
 
-			### check if new connected bridge end is shiftable
+			### check if new connected bridge end is non-shiftable
 			if not isBridgeEndShiftable(ntCs, ni_conn, -dir_shift, dir_3p):
 				return -math.inf, nts, ntCs
 
@@ -766,9 +773,6 @@ def shiftBridge(nts, ntCs, ni_ext, dir_3p, p):
 			if isNucleotide(ntCs[ni_con]):
 				print(f"Warning: Breaking single-nucleotide complementary connection to accomodate bridge @ vstrand {nts[ni_con][0]}, nucleotide {nts[ni_con][1]}\n")
 
-	### result
-	return cost, nts, ntCs
-
 
 ################################################################################
 ### Calculations
@@ -779,8 +783,6 @@ def DNAfoldify(scaffold, staples, colors_scaffold, colors_staples, p):
 	### initialize
 	scaffold_fixed = set()
 	staples_fixed = set()
-
-	# return scaffold, staples, colors_scaffold, colors_staples
 
 	### loop over scaffold spots
 	print("Shifting scaffold crossovers...")
@@ -1053,7 +1055,8 @@ def extendGroupCore(nts, ntCs, ni, dir_3p):
 
 		### check if crossover nucleotide is aligned and has complement
 		if nts[ni_conn][1] == nts[ni][1] and isNucleotide(ntCs[ni_conn]):
-			nis_add.add(ni_conn)
+			if getDir3pRef(nts[ni_conn][0], nts[ni][0], dir_3p) == dir_3p:
+				nis_add.add(ni_conn)
 
 	### check if nucleotide complementary to current spot has head-direction feature
 	if isNucleotide(ntCs[ni]) and not isDirectConn(ntCs[ni],dir_head,-dir_3p):
@@ -1141,7 +1144,8 @@ def extendGroupFull(nts, ntCs, ni, dir_shift, dir_3p, p):
 
 		### check if crossover nucleotide is aligned and has complement
 		if nts[ni_conn][1] == nts[ni][1] and isNucleotide(ntCs[ni_conn]):
-			nis_add.add(ni_conn)
+			if getDir3pRef(nts[ni_conn][0], nts[ni][0], dir_3p) == dir_3p:
+				nis_add.add(ni_conn)
 
 	### check if nucleotide complementary to current spot has head-direction feature
 	if isNucleotide(ntCs[ni]) and not isDirectConn(ntCs[ni],dir_head,-dir_3p):
@@ -1245,8 +1249,11 @@ def shiftGroup(nts, colors, nis_shift, dir_shift, vstrand_ref, dir_3p_ref):
 
 		### update crossover nucleotide if necessary
 		if ni_conn != -1:
-			nts[ni_conn][col_tail+0] = nts[ni+dir_shift][0]
-			nts[ni_conn][col_tail+1] = nts[ni+dir_shift][1]
+			dir_3p_conn = getDir3pRef(nts[ni_conn][0], nts[ni][0], dir_3p)
+			dir_head_conn = getDirHead(nts[ni_conn], dir_3p_conn)
+			col_head_conn = getCol(dir_head_conn, dir_3p_conn)
+			nts[ni_conn][col_head_conn+0] = nts[ni+dir_shift][0]
+			nts[ni_conn][col_head_conn+1] = nts[ni+dir_shift][1]
 
 	### results
 	return nts, colors
