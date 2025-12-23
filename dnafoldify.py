@@ -11,18 +11,21 @@ import copy
   # (if possible), and writes a new caDNAno file.
 
 ## To Do
-# align dsDNA crossovers to multiple of 8 separations
 # make sure no more than 2 features / 8 nucleotides
-# look for bad bridges and make ssDNA bridges one-sided
 # accomodate ssDNA crossovers that do not switch 3p direction
-# broaden scope of shifting logic to include potentially conflicting features
+# broaden scope of shifting logic to include potentially conflicting features:
+  # search until next feature
+  # if feature is terminal, include that feature in shift and return
+  # otherwise, if feature is before next legal location, add to shift and keep searching
+  # otherwise, if feature is after next legal location, ignore and return
 # take care of loops
 
 ## Fundamental Assumptions
-# if both sides of crossover have complements, the crossover is on-lattice,
-  # and thus any related lattice violations cause an error.
-# accordingly, if either side of a crossover has no complement, the alignment
-  # of the crossover may not be preserved.
+# if both sides of a crossover have complements and the crossover is aligned,
+  # the crossover is on-lattice, and thus any shift to one end of the crossover
+  # must also shift the other end.
+# if either side of a crossover has no complement or the crossover is misaligned,
+  # the crossover is off-lattice, and thus the ends shift independently.
 # scafLoops and stapLoops are relics of old code, and this if they contain
   # any values, they are removed and a warning is printed.
 
@@ -37,6 +40,7 @@ class parameters:
 	keepScafLoop: bool = False
 	keepStapLoop: bool = False
 	avoidAligningEnds: bool = False
+	avoidHalfBeads: bool = False
 	debug: bool = False
 
 ### start
@@ -50,6 +54,7 @@ def main():
 	parser.add_argument('--keepScafLoop',		action='store_true',		help='whether to keep scafLoop entries')
 	parser.add_argument('--keepStapLoop',		action='store_true',		help='whether to keep stapLoop entries')
 	parser.add_argument('--avoidAligningEnds',	action='store_true',		help='whether to avoid aligning two complementary but unstacked ends')
+	parser.add_argument('--avoidHalfBeads',		action='store_true',		help='whether to use half beads')
 
 	### set arguments
 	args = parser.parse_args()
@@ -59,6 +64,7 @@ def main():
 		keepScafLoop = args.keepScafLoop,
 		keepStapLoop = args.keepStapLoop,
 		avoidAligningEnds = args.avoidAligningEnds,
+		avoidHalfBeads = args.avoidHalfBeads,
 		debug = args.debug)
 
 
@@ -69,11 +75,22 @@ def main():
 	j, scaffold, staples, colors_scaffold, colors_staples, skips, loops = parseCaDNAno(p)
 
 	### check compatability and clean up skips and loops
+	p.nnt_bead = 8 if p.avoidHalfBeads else 4
 	scaffold, staples, colors_scaffold, colors_staples, loops = preprocess(scaffold, staples, colors_scaffold, colors_staples, skips, loops, p)
 
 	### shift things around
 	if not p.cleanOnly:
+
+		### full bead shift
+		p.nnt_bead = 8
+		p.finalShift = True if p.avoidHalfBeads else False
 		scaffold, staples, colors_scaffold, colors_staples = DNAfoldify(scaffold, staples, colors_scaffold, colors_staples, p)
+
+		### half bead shift
+		if not p.avoidHalfBeads:
+			p.nnt_bead = 4
+			p.finalShift = True
+			scaffold, staples, colors_scaffold, colors_staples = DNAfoldify(scaffold, staples, colors_scaffold, colors_staples, p)
 
 	### write edited file
 	writeCaDNAno(j, scaffold, staples, colors_scaffold, colors_staples, loops, p)
@@ -103,7 +120,10 @@ def parseCaDNAno(p):
 
 	### loop over virtual strands
 	for el1 in j["vstrands"]:
-		
+
+		### get virtual strand index
+		vi = el1["num"]
+
 		### loop over the elements of the virtual strand
 		for el2_key, el2 in el1.items():
 
@@ -198,6 +218,11 @@ def parseCaDNAno(p):
 		print("Error: No break found in scaffold.\n")
 		sys.exit()
 
+	### check if scaffold 5p end found
+	if colors_scaffold is None:
+		print("Error: No scaffold color found.\n")
+		sys.exit()
+
 	### results
 	return j, scaffold, staples, colors_scaffold, colors_staples, skips, loops
 
@@ -216,13 +241,13 @@ def writeCaDNAno(j, scaffold, staples, colors_scaffold, colors_staples, loops, p
 	### loop over virtual strands
 	for vi in range(len(j["vstrands"])):
 
-		### edit scaffold
+		### write scaffold
 		for ni in range(len(scaffold)):
 			if scaffold[ni][0] == j["vstrands"][vi]["num"]:
 				ni_vstrand = scaffold[ni][1]
 				j_edit["vstrands"][vi]["scaf"][ni_vstrand] = scaffold[ni][2:]
 
-		### edit staples
+		### write staples
 		for ni in range(len(staples)):
 			if staples[ni][0] == j["vstrands"][vi]["num"]:
 				ni_vstrand = staples[ni][1]
@@ -232,7 +257,18 @@ def writeCaDNAno(j, scaffold, staples, colors_scaffold, colors_staples, loops, p
 		j_edit["vstrands"][vi]["scaf_colors"] = []
 		j_edit["vstrands"][vi]["stap_colors"] = []
 
-		### remove skips
+		### write skips (all zero)
+		for ni_vstrand in range(len(j["vstrands"][vi]["skip"])):
+			j_edit["vstrands"][vi]["skip"][ni_vstrand] = 0
+
+		### write loops
+		for ni in range(len(loops)):
+			if loops[ni][0] == j["vstrands"][vi]["num"]:
+				ni_vstrand = loops[ni][1]
+				j_edit["vstrands"][vi]["loop"][ni_vstrand] = 0
+				if loops[ni][2] != 0:
+					print(f"Warning: Removing loop @ vstrand {loops[ni][0]}, nucleotide {loops[ni][1]}")
+
 		for ni_vstrand in range(len(j["vstrands"][vi]["skip"])):
 			j_edit["vstrands"][vi]["skip"][ni_vstrand] = 0
 
@@ -259,7 +295,7 @@ def writeCaDNAno(j, scaffold, staples, colors_scaffold, colors_staples, loops, p
 def preprocess(scaffold, staples, colors_scaffold, colors_staples, skips, loops, p):
 	print("Checking compatibility and cleaning up...")
 
-	### look for high skip frequency
+	### check for high skip frequency
 	for ni in range(len(skips)-7):
 		if scaffold[ni+7][0] == scaffold[ni][0]:
 			if sum(1 for s in skips[ni:ni+8] if s[2] != 0) > 1:
@@ -272,35 +308,9 @@ def preprocess(scaffold, staples, colors_scaffold, colors_staples, skips, loops,
 	scaffold, staples = fixSkipsCase3(scaffold, staples, skips, p)
 	scaffold, staples = fixSkipsCase4(scaffold, staples, skips, p)
 
-	### lop sides of bridge together (makes finding bridge bulges easier, and makes discretization of ssDNA stretches easier)
-
-	### look for bridge bulges
-	for ni in range(len(scaffold)):
-		dir_3p_scaf = getDir3pScaf(scaffold[ni][0])
-		dir_3p_stap = getDir3pStap(staples[ni][0])
-		if (isBridgeConn(scaffold[ni],1,dir_3p_scaf) and isBridgeConn(staples[ni],1,dir_3p_stap) and
-			getDntConn(scaffold[ni],1,dir_3p_scaf) != getDntConn(staples[ni],1,dir_3p_stap)):
-				print("Error: Detected bulge.\n")
-				sys.exit()
-
-	### clean up crossovers
-	for ni in range(len(scaffold)-1):
-
-		### check scaffold
-		dir_3p_scaf = getDir3pScaf(scaffold[ni][0])
-		if isCrossover(scaffold[ni],dir_3p_scaf,dir_3p_scaf):
-			nt_conn = scaffold[ni][4:6]
-			ni_conn = findNucleotide(nt_conn, scaffold)
-			if isNucleotide(staples[ni_conn]) and scaffold[ni][5] != scaffold[ni][1]:
-				print("Error: Detected misaligned crossover between to dsDNA strands.\n")
-
-		### check staples
-		dir_3p_stap = getDir3pStap(staples[ni][0])
-		if isCrossover(staples[ni],dir_3p_stap,dir_3p_stap) and isNucleotide(staples[ni]):
-			nt_conn = staples[ni][4:6]
-			ni_conn = findNucleotide(nt_conn, staples)
-			if isNucleotide(scaffold[ni_conn]) and (staples[ni][5]-staples[ni][1])%8 != 0:
-				print("Error: Detected misaligned crossover between to dsDNA strands.\n")
+	### take care of bridges
+	scaffold, staples = fixBridges(scaffold, staples, 0, getDir3pScaf(0), p)
+	staples, scaffold = fixBridges(staples, scaffold, 0, getDir3pStap(0), p)
 
 	### results
 	return scaffold, staples, colors_scaffold, colors_staples, loops
@@ -488,7 +498,6 @@ def fixSkipsCase4(scaffold, staples, skips, p):
 				getDntConn(nts[ni-1],1,dir_3p) == 0 and getDntConn(nts[ni+1],-1,dir_3p) == 0 and
 				nts[ni-1][getCol(1,dir_3p)] == nts[ni+1][getCol(-1,dir_3p)]):
 
-
 				### check other side of crossovers for skip
 				nt_other = [ nts[ni-1][getCol(1,dir_3p)], nts[ni][1]]
 				ni_other = findNucleotide(nt_other, nts)
@@ -528,6 +537,239 @@ def fixSkipsCase4(scaffold, staples, skips, p):
 	return scaffold, staples
 
 
+### check for incompatible bridges and unite ssDNA bridges
+def fixBridges(nts, ntCs, vstrand_ref, dir_3p_ref, p):
+
+	### loop over nucleotides
+	for ni in range(len(nts)):
+		dir_3p = getDir3pRef(nts[ni][0], vstrand_ref, dir_3p_ref)
+
+		### check first bridge end
+		if isNucleotideBridge(nts[ni], dir_3p):
+
+			### get bridge metadata
+			dir_head = getDirHead(nts[ni], dir_3p)
+			col_head = getCol(dir_head, dir_3p)
+			nt_conn = nts[ni][col_head:col_head+2]
+			ni_conn = findNucleotide(nt_conn, nts)
+
+			### check if bridge end is shiftable and compatible
+			if not isBridgeEndShiftable(ntCs, ni, dir_head, dir_3p):
+				continue
+
+			### check if connected bridge end is shiftable and compatible
+			if not isBridgeEndShiftable(ntCs, ni_conn, -dir_head, dir_3p):
+				continue
+
+			### try extension of first bridge end (contraction of second)
+			cost_ext, nts_ext, ntCs_ext = shiftBridge(nts, ntCs, ni, dir_3p, p)
+
+			### try contraction of first bridge end (extension of second)
+			cost_con, nts_con, ntCs_con = shiftBridge(nts, ntCs, ni_conn, dir_3p, p)
+
+			### check for invalid solution
+			if cost_ext == math.inf and cost_con == math.inf:
+				print(f"Error: Could not find suitable shift location for bridge @ vstrand {nts[ni][0]}, nucleotide {nts[ni][1]}\n")
+				sys.exit()
+
+			### chose extension
+			if cost_ext < cost_con:
+				nts = nts_ext
+				ntCs = ntCs_ext
+
+			### choose contraction
+			elif cost_con < cost_ext:
+				nts = nts_con
+				ntCs = ntCs_con
+
+			### chose extension
+			elif dir_head == 1:
+				nts = nts_ext
+				ntCs = ntCs_ext
+
+			### choose contraction
+			else:
+				nts = nts_con
+				ntCs = ntCs_con
+
+	### result
+	return nts, ntCs
+
+
+### determine whether bridge end is shiftable, given complementary strand
+def isBridgeEndShiftable(ntCs, ni, dir_head, dir_3p):
+
+	### bridge end complement does not exist: shiftable, if compatible
+	if not isNucleotide(ntCs[ni]):
+
+		### search for complementary strand
+		while True:
+			ni -= 1
+
+			### complementary strand ends with end or crossover: shiftable
+			if isEnd(ntCs[ni], dir_head, -dir_3p) or isCrossover(ntCs[ni], dir_head, -dir_3p):
+				return True
+
+			### complementary strand ends with bridge: incompatible
+			if isBridge(ntCs[ni], dir_head, -dir_3p):
+				print(f"Error: Mismatched bridge ends @ vstrand {ntCs[ni][0]}, nucleotide {ntCs[ni][1]}\n")
+				sys.exit()		
+
+	### bridge end complement has head-direction end or crossover: shiftable
+	if isEnd(ntCs[ni], dir_head, -dir_3p) or isCrossover(ntCs[ni], dir_head, -dir_3p):
+		return True
+
+	### bridge end complement has head direction bridge: non-shiftable
+	if isBridge(ntCs[ni], dir_head, -dir_3p):
+		return False
+
+	### search along complementary strand
+	while True:
+		ni += 1
+
+		### complementary strand ends with end or crossover: non-shiftable
+		if isEnd(ntCs[ni], dir_head, -dir_3p) or isCrossover(ntCs[ni], dir_head, -dir_3p):
+			return False
+
+		### complementary strand ends with bridge: incompatible
+		if isBridge(ntCs[ni], dir_head, -dir_3p):
+			print(f"Error: Mismatched bridge ends @ vstrand {ntCs[ni][0]}, nucleotide {ntCs[ni][1]}\n")
+			sys.exit()			
+
+
+### attempt to unite bridge by extending the given end
+def shiftBridge(nts, ntCs, ni_ext, dir_3p, p):
+
+	### get head/shift direction
+	dir_shift = getDirHead(nts[ni_ext], dir_3p)
+
+	### get connected nucleotide
+	col_withShift, col_antiShift = getCols(dir_shift, dir_3p)
+	nt_con = nts[ni_ext][col_withShift:col_withShift+2]
+	ni_con = findNucleotide(nt_con, nts)
+
+	### initialize
+	nts = copy.deepcopy(nts)
+	ntCs = copy.deepcopy(ntCs)
+	cost = 0	
+
+	### loop over single-spot shifts
+	while True:
+
+		### check if contracting end has complement
+		if isNucleotide(ntCs[ni_con]):
+			break
+
+		### check if extending end has room to extend
+		if isNucleotide(nts[ni_ext+dir_shift]) or isNucleotide(ntCs[ni_ext+dir_shift]) or not isRoomVstrand(ni_ext, dir_shift, nts):
+			return math.inf, None, None
+
+		### shift
+		nts[ni_ext][col_withShift+0] = nts[ni_ext+dir_shift][0]
+		nts[ni_ext][col_withShift+1] = nts[ni_ext+dir_shift][1]
+		nts[ni_ext+dir_shift][col_antiShift+0] = nts[ni_ext][0]
+		nts[ni_ext+dir_shift][col_antiShift+1] = nts[ni_ext][1]
+		nts[ni_ext+dir_shift][col_withShift+0] = nts[ni_con+dir_shift][0]
+		nts[ni_ext+dir_shift][col_withShift+1] = nts[ni_con+dir_shift][1]
+		nts[ni_con][col_antiShift+0] = -1
+		nts[ni_con][col_antiShift+1] = -1
+		nts[ni_con][col_withShift+0] = -1
+		nts[ni_con][col_withShift+1] = -1
+		nts[ni_con+dir_shift][col_antiShift+0] = nts[ni_ext+dir_shift][0]
+		nts[ni_con+dir_shift][col_antiShift+1] = nts[ni_ext+dir_shift][1]
+
+		### update bridge ends
+		ni_ext += dir_shift
+		ni_con += dir_shift
+
+		### decrease cost if extension introduces new legal spot for complement
+		if isFeatureLegal(ni_ext, dir_shift, p):
+			cost -= 1
+
+		### increase cost if contraction removes legal spot for complement
+		if isFeatureLegal(ni_con-dir_shift, -dir_shift, p):
+			cost += 1
+
+		### check if contracted end has head-direction end
+		if isEnd(nts[ni_con], dir_shift, dir_3p):
+
+			### shift
+			nts[ni_ext][col_withShift+0] = nts[ni_ext+dir_shift][0]
+			nts[ni_ext][col_withShift+1] = nts[ni_ext+dir_shift][1]
+			nts[ni_ext+dir_shift][col_antiShift+0] = nts[ni_ext][0]
+			nts[ni_ext+dir_shift][col_antiShift+1] = nts[ni_ext][1]
+			nts[ni_ext+dir_shift][col_withShift+0] = -1
+			nts[ni_ext+dir_shift][col_withShift+1] = -1
+			nts[ni_con][col_antiShift+0] = -1
+			nts[ni_con][col_antiShift+1] = -1
+			nts[ni_con][col_withShift+0] = -1
+			nts[ni_con][col_withShift+1] = -1
+
+			### check for dangling complement
+			if isNucleotide(ntCs[ni_con]):
+				print(f"Warning: Breaking single-nucleotide complementary connection to accomodate bridge @ vstrand {nts[ni_con][0]}, nucleotide {nts[ni_con][1]}\n")
+
+			### finished
+			break
+
+		### check if contracted nucleotide has head-direction crossover
+		elif isCrossover(nts[ni_con], dir_shift, dir_3p):
+			nt_conn = nts[ni][col_withShift:col_withShift+2]
+			ni_conn = findNucleotide(nt_conn, nts)
+
+			### shift
+			nts[ni_ext][col_withShift+0] = nts[ni_ext+dir_shift][0]
+			nts[ni_ext][col_withShift+1] = nts[ni_ext+dir_shift][1]
+			nts[ni_ext+dir_shift][col_antiShift+0] = nts[ni_ext][0]
+			nts[ni_ext+dir_shift][col_antiShift+1] = nts[ni_ext][1]
+			nts[ni_ext+dir_shift][col_withShift+0] = nts[ni_conn][0]
+			nts[ni_ext+dir_shift][col_withShift+1] = nts[ni_conn][1]
+			nts[ni_conn][col_withShift+0] = nts[ni_ext+dir_shift][0]
+			nts[ni_conn][col_withShift+1] = nts[ni_ext+dir_shift][1]
+			nts[ni_con][col_antiShift+0] = -1
+			nts[ni_con][col_antiShift+1] = -1
+			nts[ni_con][col_withShift+0] = -1
+			nts[ni_con][col_withShift+1] = -1
+
+			### check for dangling complement
+			if isNucleotide(ntCs[ni_con]):
+				print(f"Warning: Breaking single-nucleotide complementary connection to accomodate bridge @ vstrand {nts[ni_con][0]}, nucleotide {nts[ni_con][1]}\n")
+
+		### check if contracted nucleotide has head-direction bridge
+		elif isBridge(nts[ni_con], dir_shift, dir_3p):
+			nt_conn = nts[ni_con][col_withShift:col_withShift+2]
+			ni_conn = findNucleotide(nt_conn, nts)
+
+			### shift
+			nts[ni_ext][col_withShift+0] = nts[ni_ext+dir_shift][0]
+			nts[ni_ext][col_withShift+1] = nts[ni_ext+dir_shift][1]
+			nts[ni_ext+dir_shift][col_antiShift+0] = nts[ni_ext][0]
+			nts[ni_ext+dir_shift][col_antiShift+1] = nts[ni_ext][1]
+			nts[ni_ext+dir_shift][col_withShift+0] = nts[ni_conn][0]
+			nts[ni_ext+dir_shift][col_withShift+1] = nts[ni_conn][1]
+			nts[ni_conn][col_antiShift+0] = nts[ni_ext+dir_shift][0]
+			nts[ni_conn][col_antiShift+1] = nts[ni_ext+dir_shift][1]
+			nts[ni_con][col_antiShift+0] = -1
+			nts[ni_con][col_antiShift+1] = -1
+			nts[ni_con][col_withShift+0] = -1
+			nts[ni_con][col_withShift+1] = -1
+
+			### check if new connected bridge end is shiftable
+			if not isBridgeEndShiftable(ntCs, ni_conn, -dir_shift, dir_3p):
+				return -math.inf, nts, ntCs
+
+			### update bridge ends
+			ni_ext +=1
+			ni_con = ni_conn
+
+			### check for dangling complement
+			if isNucleotide(ntCs[ni_con]):
+				print(f"Warning: Breaking single-nucleotide complementary connection to accomodate bridge @ vstrand {nts[ni_con][0]}, nucleotide {nts[ni_con][1]}\n")
+
+	### result
+	return cost, nts, ntCs
+
+
 ################################################################################
 ### Calculations
 
@@ -538,12 +780,14 @@ def DNAfoldify(scaffold, staples, colors_scaffold, colors_staples, p):
 	scaffold_fixed = set()
 	staples_fixed = set()
 
+	# return scaffold, staples, colors_scaffold, colors_staples
+
 	### loop over scaffold spots
 	print("Shifting scaffold crossovers...")
 	if p.debug: print("")
 	for ni in range(len(scaffold)):
 		dir_3p = getDir3pScaf(scaffold[ni][0])
-		if isIllegalCrossover(scaffold[ni],dir_3p):
+		if isIllegalCrossover(scaffold[ni], dir_3p, p):
 			scaffold, staples, colors_scaffold, colors_staples, scaffold_fixed, staples_fixed = fixGroup(
 			scaffold, staples, colors_scaffold, colors_staples, scaffold_fixed, staples_fixed, ni, dir_3p, p)
 		elif isNucleotideCrossover(scaffold[ni],dir_3p):
@@ -554,18 +798,19 @@ def DNAfoldify(scaffold, staples, colors_scaffold, colors_staples, p):
 	if p.debug: print("")
 	for ni in range(len(staples)):
 		dir_3p = getDir3pStap(staples[ni][0])
-		if isIllegalCrossover(staples[ni], dir_3p):
+		if isIllegalCrossover(staples[ni], dir_3p, p):
 			staples, scaffold, colors_staples, colors_scaffold, staples_fixed, scaffold_fixed = fixGroup(
 			staples, scaffold, colors_staples, colors_scaffold, staples_fixed, scaffold_fixed, ni, dir_3p, p)
 		elif isNucleotideCrossover(staples[ni],dir_3p):
 			staples_fixed.add(ni)
+
 
 	## loop over scaffold spots
 	print("Shifting scaffold ends...")
 	if p.debug: print("")
 	for ni in range(len(scaffold)):
 		dir_3p = getDir3pScaf(scaffold[ni][0])
-		if isIllegalEnd(scaffold[ni], dir_3p):
+		if isIllegalEnd(scaffold[ni], dir_3p, p):
 			scaffold, staples, colors_scaffold, colors_staples, scaffold_fixed, staples_fixed = fixGroup(
 			scaffold, staples, colors_scaffold, colors_staples, scaffold_fixed, staples_fixed, ni, dir_3p, p)
 		elif isNucleotideEnd(scaffold[ni],dir_3p):
@@ -576,7 +821,7 @@ def DNAfoldify(scaffold, staples, colors_scaffold, colors_staples, p):
 	if p.debug: print("")
 	for ni in range(len(staples)):
 		dir_3p = getDir3pStap(staples[ni][0])
-		if isIllegalEnd(staples[ni], dir_3p):
+		if isIllegalEnd(staples[ni], dir_3p, p):
 			staples, scaffold, colors_staples, colors_scaffold, staples_fixed, scaffold_fixed = fixGroup(
 			staples, scaffold, colors_staples, colors_scaffold, staples_fixed, scaffold_fixed, ni, dir_3p, p)
 		elif isNucleotideEnd(staples[ni],dir_3p):
@@ -587,10 +832,10 @@ def DNAfoldify(scaffold, staples, colors_scaffold, colors_staples, p):
 	if p.debug: print("")
 	for ni in range(len(scaffold)):
 		dir_3p = getDir3pScaf(scaffold[ni][0])
-		if isIllegalBridgeConn(scaffold[ni], dir_3p):
+		if isIllegalBridge(scaffold[ni], dir_3p, p):
 			scaffold, staples, colors_scaffold, colors_staples, scaffold_fixed, staples_fixed = fixGroup(
 			scaffold, staples, colors_scaffold, colors_staples, scaffold_fixed, staples_fixed, ni, dir_3p, p)
-		elif isNucleotideBridgeConn(scaffold[ni],dir_3p):
+		elif isNucleotideBridge(scaffold[ni],dir_3p):
 			scaffold_fixed.add(ni)
 
 	### loop over staple spots
@@ -598,10 +843,10 @@ def DNAfoldify(scaffold, staples, colors_scaffold, colors_staples, p):
 	if p.debug: print("")
 	for ni in range(len(staples)):
 		dir_3p = getDir3pStap(staples[ni][0])
-		if isIllegalBridgeConn(staples[ni], dir_3p):
+		if isIllegalBridge(staples[ni], dir_3p, p):
 			staples, scaffold, colors_staples, colors_scaffold, staples_fixed, scaffold_fixed = fixGroup(
 			staples, scaffold, colors_staples, colors_scaffold, staples_fixed, scaffold_fixed, ni, dir_3p, p)
-		elif isNucleotideBridgeConn(staples[ni],dir_3p):
+		elif isNucleotideBridge(staples[ni],dir_3p):
 			staples_fixed.add(ni)
 
 	### results
@@ -617,39 +862,26 @@ def fixGroup(nts, ntCs, colors, colorCs, nis_fixed, niCs_fixed, ni_init, dir_3p,
 	### get reference identity
 	vstrand_ref = nts[ni_init][0]
 
-	### initialize
-	nts_ext = copy.deepcopy(nts)
-	nts_con = copy.deepcopy(nts)
-	ntCs_ext = copy.deepcopy(ntCs)
-	ntCs_con = copy.deepcopy(ntCs)
-	colors_ext = copy.deepcopy(colors)
-	colors_con = copy.deepcopy(colors)
-	colorCs_ext = copy.deepcopy(colorCs)
-	colorCs_con = copy.deepcopy(colorCs)
-	nis_fixed_ext = copy.deepcopy(nis_fixed)
-	nis_fixed_con = copy.deepcopy(nis_fixed)
-	niCs_fixed_ext = copy.deepcopy(niCs_fixed)
-	niCs_fixed_con = copy.deepcopy(niCs_fixed)
-
 	### try extension
 	dir_shift = dir_head
-	output_ext = attemptFixGroup(nts_ext, ntCs_ext, colors_ext, colorCs_ext, nis_fixed_ext, niCs_fixed_ext, ni_init, dir_shift, vstrand_ref, dir_3p, p)
+	output_ext = attemptFixGroup(nts, ntCs, colors, colorCs, nis_fixed, niCs_fixed, ni_init, dir_shift, vstrand_ref, dir_3p, p)
 	cost_ext = output_ext[0]
 	nnt_shift_ext = output_ext[1]
 
 	### try contraction
 	dir_shift = -dir_head
-	output_con = attemptFixGroup(nts_con, ntCs_con, colors_con, colorCs_con, nis_fixed_con, niCs_fixed_con, ni_init, dir_shift, vstrand_ref, dir_3p, p)
+	output_con = attemptFixGroup(nts, ntCs, colors, colorCs, nis_fixed, niCs_fixed, ni_init, dir_shift, vstrand_ref, dir_3p, p)
 	cost_con = output_con[0]
 	nnt_shift_con = output_con[1]
 
 	### check for failure
 	if cost_con == math.inf and cost_ext == math.inf:
-		print(f"Warning: could not find suitable shift location: vstrand {nts[ni_init][0]}, nucleotide {nts[ni_init][1]}")
+		if p.finalShift:
+			print(f"Warning: Could not find suitable shift location @ vstrand {nts[ni_init][0]}, nucleotide {nts[ni_init][1]}")
 		return nts, ntCs, colors, colorCs, nis_fixed, niCs_fixed
 
 	### choose extension
-	elif cost_ext < cost_con:
+	if cost_ext < cost_con:
 		result = output_ext[2:]
 		dir_shift = dir_head
 		nnt_shift = nnt_shift_ext
@@ -696,11 +928,19 @@ def fixGroup(nts, ntCs, colors, colorCs, nis_fixed, niCs_fixed, ni_init, dir_3p,
 
 ### shift a nucleotide in a given direction until its feature is legal, moving other features if necessary and possible
 def attemptFixGroup(nts, ntCs, colors, colorCs, nis_fixed, niCs_fixed, ni_init, dir_shift, vstrand_ref, dir_3p_ref, p):
-
-	### initailize
+	
+	### initialize
 	ni_init_curr = ni_init
 	nnt_shift = 0
 	cost = 0
+
+	### initialize
+	nts = copy.deepcopy(nts)
+	ntCs = copy.deepcopy(ntCs)
+	colors = copy.deepcopy(colors)
+	colorCs = copy.deepcopy(colorCs)
+	nis_fixed = copy.deepcopy(nis_fixed)
+	niCs_fixed = copy.deepcopy(niCs_fixed)
 
 	### get core goup of moving nucleotides
 	nis_group_core, niCs_group_core = buildGroupCore(nts, ntCs, ni_init, vstrand_ref, dir_3p_ref)
@@ -712,10 +952,14 @@ def attemptFixGroup(nts, ntCs, colors, colorCs, nis_fixed, niCs_fixed, ni_init, 
 		success, nis_group, niCs_group = buildGroupFull(nts, ntCs, nis_fixed, niCs_fixed, ni_init_curr, dir_shift, vstrand_ref, dir_3p_ref, p)
 		if not success:
 			return math.inf, None, None, None, None, None, None, None
-		
+
 		### shift the nucleotides
 		nts, colors = shiftGroup(nts, colors, nis_group, dir_shift, vstrand_ref, dir_3p_ref)
 		ntCs, colorCs = shiftGroup(ntCs, colorCs, niCs_group, dir_shift, vstrand_ref, -dir_3p_ref)
+
+		### update core group
+		nis_group_core = { ni+dir_shift for ni in nis_group_core }
+		niCs_group_core = { ni+dir_shift for ni in niCs_group_core }
 
 		### update 
 		ni_init_curr += dir_shift
@@ -724,7 +968,7 @@ def attemptFixGroup(nts, ntCs, colors, colorCs, nis_fixed, niCs_fixed, ni_init, 
 		nnt_shift += 1
 
 		### check for completion
-		if isNucleotideLegal(nts[ni_init_curr], dir_3p_ref):
+		if isNucleotideLegal(nts[ni_init_curr], dir_3p_ref, p):
 			break
 
 	### get moved nucleotices
@@ -734,11 +978,11 @@ def attemptFixGroup(nts, ntCs, colors, colorCs, nis_fixed, niCs_fixed, ni_init, 
 	### update fixed nucleotides list
 	for ni in nis_moved:
 		dir_3p = getDir3pRef(nts[ni][0], vstrand_ref, dir_3p_ref)
-		if isNucleotideLegal(nts[ni], dir_3p):
+		if isNucleotideLegal(nts[ni], dir_3p, p):
 			nis_fixed.add(ni)
 	for ni in niCs_moved:
 		dir_3p = getDir3pRef(ntCs[ni][0], vstrand_ref, -dir_3p_ref)
-		if isNucleotideLegal(ntCs[ni], dir_3p):
+		if isNucleotideLegal(ntCs[ni], dir_3p, p):
 			niCs_fixed.add(ni)
 
 	### result
@@ -807,8 +1051,8 @@ def extendGroupCore(nts, ntCs, ni, dir_3p):
 		nt_conn = nts[ni][col_head:col_head+2]
 		ni_conn = findNucleotide(nt_conn, nts)
 
-		### check if crossover nucleotide has complement
-		if isNucleotide(ntCs[ni_conn]):
+		### check if crossover nucleotide is aligned and has complement
+		if nts[ni_conn][1] == nts[ni][1] and isNucleotide(ntCs[ni_conn]):
 			nis_add.add(ni_conn)
 
 	### check if nucleotide complementary to current spot has head-direction feature
@@ -839,6 +1083,7 @@ def buildGroupFull(nts, ntCs, nis_fixed, niCs_fixed, ni_init, dir_shift, vstrand
 
 		### loop over nucleotides in current layer
 		for ni in nis_curr:
+
 			dir_3p = getDir3pRef(nts[ni][0], vstrand_ref, dir_3p_ref)
 			nis_add, niCs_add = extendGroupFull(nts, ntCs, ni, dir_shift, dir_3p, p)
 			nis_next.update(nis_add)
@@ -846,6 +1091,7 @@ def buildGroupFull(nts, ntCs, nis_fixed, niCs_fixed, ni_init, dir_shift, vstrand
 
 		### loop over complementary nucleotides in current layer
 		for ni in niCs_curr:
+
 			dir_3p = getDir3pRef(ntCs[ni][0], vstrand_ref, -dir_3p_ref)
 			niCs_add, nis_add = extendGroupFull(ntCs, nts, ni, dir_shift, dir_3p, p)
 			nis_next.update(nis_add)
@@ -893,8 +1139,8 @@ def extendGroupFull(nts, ntCs, ni, dir_shift, dir_3p, p):
 		nt_conn = nts[ni][col_head:col_head+2]
 		ni_conn = findNucleotide(nt_conn, nts)
 
-		### check if crossover nucleotide has complement
-		if isNucleotide(ntCs[ni_conn]):
+		### check if crossover nucleotide is aligned and has complement
+		if nts[ni_conn][1] == nts[ni][1] and isNucleotide(ntCs[ni_conn]):
 			nis_add.add(ni_conn)
 
 	### check if nucleotide complementary to current spot has head-direction feature
@@ -971,9 +1217,6 @@ def shiftGroup(nts, colors, nis_shift, dir_shift, vstrand_ref, dir_3p_ref):
 		else:
 			nt_conn = nts[ni][col_head:col_head+2]
 			ni_conn = findNucleotide(nt_conn, nts)
-			if ni_conn in nis_shift:
-				nt_conn[1] += dir_shift
-				ni_conn += dir_shift
 
 		### update color identifiers if necessary
 		colors = updateColors(nts[ni], colors, dir_shift, dir_3p)
@@ -1013,8 +1256,8 @@ def shiftGroup(nts, colors, nis_shift, dir_shift, vstrand_ref, dir_3p_ref):
 ### Utility Functions
 
 ### check if feature at given location is compatible with DNAfold
-def isFeatureLegal(ni, dir_feature):
-	return (2*ni+dir_feature+1)%16 == 0
+def isFeatureLegal(ni, dir_feature, p):
+	return (2*ni+dir_feature+1)%(2*p.nnt_bead) == 0
 
 
 ### check if nucleotide exists
@@ -1029,7 +1272,7 @@ def isDirectConn(nt, dir_feature, dir_3p):
 
 
 ### check if nucleotide exists and has bridge connection in given direction
-def isBridgeConn(nt, dir_feature, dir_3p):
+def isBridge(nt, dir_feature, dir_3p):
 	col = 4 if dir_feature == dir_3p else 2
 	return (nt[col] == nt[0] and nt[col+1] != nt[1]+dir_feature)
 
@@ -1049,22 +1292,23 @@ def isEnd(nt, dir_feature, dir_3p):
 ### find head direction of feature
 def getDirHead(nt, dir_3p):
 	if not isNucleotide(nt):
-		print("Error: Cannot determine head direction for non-existent nucleotide.")
+		print(f"Error: Cannot determine head direction for non-existent nucleotide @ vstrand {nt[0]}, nucleotide {nt[1]}\n")
 		sys.exit()
 	elif not isDirectConn(nt,1,dir_3p):
 		return 1
 	elif not isDirectConn(nt,-1,dir_3p):
 		return -1
 	else:
-		print("Error: Cannot determine head direction for nucleotide with no feature.")
-		sys.exit()
+		raise ValueError("BAH")
+		#print(f"Error: Cannot determine head direction for nucleotide with no feature @ vstrand {nt[0]}, nucleotide {nt[1]}\n")
+		#sys.exit()
 
 
 ### get difference in positions between nucleotide and its connection on the given side
 def getDntConn(nt, dir_feature, dir_3p):
 	col = 4 if dir_feature == dir_3p else 2
 	if nt[col] == -1:
-		print("Error: no connection on given side.\n")
+		print(f"Error: No connection on given side @ vstrand {nt[0]}, nucleotide {nt[1]}\n")
 	return nt[col+1]-nt[1]
 
 
@@ -1149,8 +1393,8 @@ def isRoomVstrand(ni, dir_shift, nts):
 ################################################################################
 ### Logic Functions
 
-def isNucleotideBridgeConn(nt, dir_3p):
-	return isBridgeConn(nt,1,dir_3p) or isBridgeConn(nt,-1,dir_3p)
+def isNucleotideBridge(nt, dir_3p):
+	return isBridge(nt,1,dir_3p) or isBridge(nt,-1,dir_3p)
 
 
 def isNucleotideCrossover(nt, dir_3p):
@@ -1161,23 +1405,23 @@ def isNucleotideEnd(nt, dir_3p):
 	return isEnd(nt,1,dir_3p) or isEnd(nt,-1,dir_3p)
 
 
-def isIllegalBridgeConn(nt, dir_3p):
-	return ( (isBridgeConn(nt,dir_3p,dir_3p) and not isFeatureLegal(nt[1],dir_3p)) or 
-			 (isBridgeConn(nt,-dir_3p,dir_3p) and not isFeatureLegal(nt[1],-dir_3p)) )
+def isIllegalBridge(nt, dir_3p, p):
+	return ( (isBridge(nt,dir_3p,dir_3p) and not isFeatureLegal(nt[1],dir_3p,p)) or 
+			 (isBridge(nt,-dir_3p,dir_3p) and not isFeatureLegal(nt[1],-dir_3p,p)) )
 
 
-def isIllegalCrossover(nt, dir_3p):
-	return ( (isCrossover(nt,dir_3p,dir_3p) and not isFeatureLegal(nt[1],dir_3p)) or 
-			 (isCrossover(nt,-dir_3p,dir_3p) and not isFeatureLegal(nt[1],-dir_3p)) )
+def isIllegalCrossover(nt, dir_3p, p):
+	return ( (isCrossover(nt,dir_3p,dir_3p) and not isFeatureLegal(nt[1],dir_3p,p)) or 
+			 (isCrossover(nt,-dir_3p,dir_3p) and not isFeatureLegal(nt[1],-dir_3p,p)) )
 
 
-def isIllegalEnd(nt, dir_3p):
-	return ( (isEnd(nt,dir_3p,dir_3p) and not isFeatureLegal(nt[1],dir_3p)) or 
-			 (isEnd(nt,-dir_3p,dir_3p) and not isFeatureLegal(nt[1],-dir_3p)) )
+def isIllegalEnd(nt, dir_3p, p):
+	return ( (isEnd(nt,dir_3p,dir_3p) and not isFeatureLegal(nt[1],dir_3p,p)) or 
+			 (isEnd(nt,-dir_3p,dir_3p) and not isFeatureLegal(nt[1],-dir_3p,p)) )
 
 
-def isNucleotideLegal(nt, dir_3p):
-	return not (isIllegalBridgeConn(nt,dir_3p) or isIllegalCrossover(nt,dir_3p) or isIllegalEnd(nt,dir_3p))
+def isNucleotideLegal(nt, dir_3p, p):
+	return not (isIllegalBridge(nt,dir_3p,p) or isIllegalCrossover(nt,dir_3p,p) or isIllegalEnd(nt,dir_3p,p))
 
 
 ### run the script
