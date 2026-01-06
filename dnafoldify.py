@@ -1051,8 +1051,8 @@ def extendGroupCore(nts, ntCs, ni, dir_3p):
 
 		### check if crossover nucleotide is aligned and has complement
 		if nts[ni_conn][1] == nts[ni][1] and isNucleotide(ntCs[ni_conn]):
-			# if getDir3pRef(nts[ni_conn][0], nts[ni][0], dir_3p) == dir_3p:
-			nis_add.add(ni_conn)
+			if getDir3pRef(nts[ni_conn][0], nts[ni][0], dir_3p) == -dir_3p:
+				nis_add.add(ni_conn)
 
 	### check if nucleotide complementary to current spot has head-direction feature
 	if isNucleotide(ntCs[ni]) and not isDirectConn(ntCs[ni],dir_head,-dir_3p):
@@ -1140,8 +1140,8 @@ def extendGroupFull(nts, ntCs, ni, dir_shift, dir_3p, p):
 
 		### check if crossover nucleotide is aligned and has complement
 		if nts[ni_conn][1] == nts[ni][1] and isNucleotide(ntCs[ni_conn]):
-			# if getDir3pRef(nts[ni_conn][0], nts[ni][0], dir_3p) == dir_3p:
-			nis_add.add(ni_conn)
+			if getDir3pRef(nts[ni_conn][0], nts[ni][0], dir_3p) == -dir_3p:
+				nis_add.add(ni_conn)
 
 	### check if nucleotide complementary to current spot has head-direction feature
 	if isNucleotide(ntCs[ni]) and not isDirectConn(ntCs[ni],dir_head,-dir_3p):

@@ -37,13 +37,13 @@ import os
 def main():
 
 	### where to get files
-	useDanielFiles = True
+	useDanielFiles = False
 
 	### special code to make Daniel happy
 	if useDanielFiles:
 
 		### chose design
-		desID = "2HBx1"				# design identification
+		desID = "2HBx4"				# design identification
 		simTag = ""					# appended to desID to get name of output folder
 		simType = "experiment"		# prepended to desID to get name of output folder within standard location
 		rstapTag = None				# tag for reserved staples file (None for not reserving staples)
